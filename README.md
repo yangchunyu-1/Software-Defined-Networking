@@ -18,7 +18,8 @@ Software-Defined-Networking/
 │   ├── 01_技术选型报告.md
 │   ├── 02_接口契约与数据结构.md     ★ 冻结件，改接口先改它
 │   ├── 03_三人分工与开发计划.md     ★ N0–N7 闸门 + 十条硬口径
-│   └── 04_范围与需求冻结.md         ★ 做什么 / 不做什么 / 怎么算做完
+│   ├── 04_范围与需求冻结.md         ★ 做什么 / 不做什么 / 怎么算做完
+│   └── 05_异步协作约定.md           ★ 节奏 / 分支与 PR / 契约测试
 └── brain/               ← 代码根，所有 python 都在这
     ├── config.py            常量（唯一一处）
     ├── onos.py              同步 REST（requests）
@@ -29,8 +30,9 @@ Software-Defined-Networking/
     ├── group.py             组表（ovs-ofctl）
     ├── main.py              Sanic 服务 / 路由 / 轮询挂载
     ├── static/index.html    拓扑可视化（零 CDN、零框架）
-    ├── samples/             真实 ONOS 响应（乙丙的测试数据）
-    ├── tests/
+    ├── samples/             真实 ONOS 响应（只能是真的，不许手编）
+    ├── tests/               契约测试（每人为自己的模块写一份）
+    │   └── fixtures/        手写样本，结构照 docs/02 第 4 节
     └── run.sh               一键启动
 ```
 
@@ -41,7 +43,10 @@ Software-Defined-Networking/
 | 写代码，要知道函数怎么调 | [`docs/02`](docs/02_接口契约与数据结构.md) |
 | 要知道做到什么程度算完、什么不做 | [`docs/04`](docs/04_范围与需求冻结.md) |
 | 要知道自己负责哪块、现在该干什么 | [`docs/03`](docs/03_三人分工与开发计划.md) |
+| 要知道怎么和别人异步配合（分支、PR、测试） | [`docs/05`](docs/05_异步协作约定.md) |
 | 被问「为什么用它不用 XX」 | [`docs/01`](docs/01_技术选型报告.md) |
+
+**协作节奏**：每周四晚碰头一次对齐闸门，其余时间全部异步。见 [`docs/05`](docs/05_异步协作约定.md)。
 
 ---
 
