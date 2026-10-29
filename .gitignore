@@ -85,7 +85,7 @@ ipython_config.py
 
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
+#   intended to run in multiple environments; otherwise, check them in:Add a comment on line R88Add diff commentMarkdown input:  edit mode selected.WritePreviewHeadingBold(control b) control⌃ bBItalic(control i) control⌃ iIQuote(control shift right angle bracket) control⌃ shift⇧ right angle bracket>Code(control e) control⌃ eELink(control k) control⌃ kKUnordered list(control 8) control⌃ 88Numbered list(control shift ampersand) control⌃ shift⇧ ampersand&Task list(control shift l) control⌃ shift⇧ lLMentionReferenceMore itemsSaved repliesAdd FilesPaste, drop, or click to add filesCancelComment
 # .python-version
 
 # pipenv
@@ -218,3 +218,24 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ============================================================
+# AI 助手工作区 —— 本机私有，不进仓库
+#   这里的任何东西都只对当前这台机器有意义，提交上去只会污染 diff。
+#   · memory/    每日工作日志 + 项目长期记忆
+#   · handoff/   交接记录（换会话 / 换模型时接着读这个）
+#   · tmp/       临时脚本、抓包、截图、一次性验证代码
+# ============================================================
+.workbuddy/
+
+# 我可能临时落在仓库根的草稿（约定：临时东西一律放 .workbuddy/tmp/，这两个只是兜底）
+_scratch/
+_ai_tmp/
+*.ai-tmp
+
+# 系统与编辑器垃圾
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
