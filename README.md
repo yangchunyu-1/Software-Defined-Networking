@@ -47,14 +47,16 @@ Software-Defined-Networking/
 
 ## 环境前提
 
-| 项 | 版本 / 状态 |
+三个人用同一套版本，跑出来的结果才能互相验证。**版本号是要求，不是某台机器的记录。**
+
+| 项 | 要求 |
 |---|---|
-| WSL2 `Ubuntu-22.04` | 22.04.5，systemd 已开，用户 `fish`（免密 sudo） |
-| Python | 3.10（`requests` / `sanic 25.12.1` / `aiohttp 3.14.5` 已装在 `~/.local`） |
+| WSL2 | Ubuntu 22.04，systemd 可用（Mininet / OVS 需要） |
+| Python | 3.10；`requests` / `sanic` / `aiohttp` 装在用户目录（`pip install --user`） |
 | Mininet | 2.3.0 |
-| Open vSwitch | 2.17.12（datapath = `system`） |
-| Docker | 29.9.0，ONOS 镜像本地已有（**不需要联网**） |
-| ONOS | 2.7.0，容器名 `onos`，`--restart=always` |
+| Open vSwitch | 2.17.x，datapath 用 `system` |
+| Docker | 用于跑 ONOS 容器；ONOS 2.7.0 镜像需提前拉到本地（离线可用） |
+| ONOS | 2.7.0，容器名 `onos`，建议 `--restart=always` |
 
 **端口与账号**（两套账号别搞混）
 
@@ -72,7 +74,8 @@ Software-Defined-Networking/
 代码在仓库 `brain/` 下，WSL 里通过 `/mnt/d` 访问。先做一条软链接省得敲长路径：
 
 ```bash
-ln -sfn "/mnt/d/repos/Software-Defined-Networking/brain" ~/brain
+REPO=/mnt/d/repos/Software-Defined-Networking      # 换成你自己的仓库路径
+ln -sfn "$REPO/brain" ~/brain
 ```
 
 **终端 A · ONOS**
@@ -123,7 +126,7 @@ curl -s localhost:8000/api/state | python3 -c "import json,sys;d=json.load(sys.s
 
 ---
 
-## 常见问题（都是本项目真踩过的）
+## 常见问题（本项目已踩过的坑）
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
@@ -141,7 +144,7 @@ curl -s localhost:8000/api/state | python3 -c "import json,sys;d=json.load(sys.s
 ## 协作约定
 
 1. **一个文件一个作者**，不许两人并行改同一模块再合并。
-2. **改接口先改 [`docs/02`](docs/02_接口契约与数据结构.md)**，群里知会后再动代码。11/2 之后只增不改。
+2. **改接口先改 [`docs/02`](docs/02_接口契约与数据结构.md)**，群里知会后再动代码。N3 冻结之后只增不改。
 3. **跑通了才算做完**：`import` 不报错不算，必须有一条真实命令 + 真实输出。
 4. **没实测的东西标 `❓`**，不许在报告或演示里当结论讲。
 5. 提交前自查：`cd brain && python3 -m compileall -q .`

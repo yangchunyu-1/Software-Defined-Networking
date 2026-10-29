@@ -21,15 +21,15 @@
 
 ## 开工前必须知道的六个事实
 
-1. **仓库根目录（Windows）**：`D:\repos\Software-Defined-Networking`
-2. **仓库根目录（WSL）**：`/mnt/d/repos/Software-Defined-Networking`
+1. **仓库有两套路径**：Windows 侧是 `<盘符>:\repos\Software-Defined-Networking`，
+   WSL 侧是 `/mnt/<盘符小写>/repos/Software-Defined-Networking`。**各人按自己机器的盘符换算。**
    代码在仓库的 `brain/`，文档在 `docs/`。
-   建议先做一条软链接，之后 `cd ~/brain` 即可，见 `03` 文档第 4 节
+2. **WSL 里建议做一条软链接**，之后 `cd ~/brain` 即可，见 `03` 文档第 4 节。
 3. **ONOS REST 认证是 `karaf/karaf`**，不是 Web GUI 的 `onos/rocks`。搞错会得到 401/404，曾因此误判「ONOS 没有 REST 接口」。
 4. **ONOS 端口**：6653（OpenFlow）/ 8101（SSH CLI）/ 8181（REST + GUI）
-5. **AI 无法在 WSL 里执行命令**（`wsl.exe` 被沙箱拉黑），只能读写 Windows 侧文件。
-   所有 WSL 命令由人手动敲，一次 1–3 条，贴回输出再走下一步。
-6. **AI 不能写 WSL 里的文件**（UNC 是只读）。这是代码放在 Windows 侧 `/mnt/d` 仓库里的唯一原因。
+5. **代码放 Windows 侧、不放进 WSL 内部**。AI 助手能读写挂载进来的文件、但执行不了 WSL 里的命令，
+   所以代码放在挂载路径下，人在 WSL 里跑。所有 WSL 命令由人手动敲，一次 1–3 条，贴回输出再走下一步。
+6. **同一套版本才能互相验证**：Ubuntu 22.04 + Python 3.10 + Mininet 2.3 + OVS 2.17 + ONOS 2.7.0，见 `README`「环境前提」。
 
 ## 已知未实测项（TBD 汇总，别当成事实用）
 
