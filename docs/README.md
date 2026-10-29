@@ -22,14 +22,15 @@
 
 ## 开工前必须知道的六个事实
 
-1. **代码根目录（Windows）**：`C:\Users\25407\Desktop\软件定义网络\sdn-brain`
-2. **代码根目录（WSL）**：`/mnt/c/Users/25407/Desktop/软件定义网络/sdn-brain`
-   （建议先做一条软链接，之后 `cd ~/sdn-brain` 即可，见 03 文档第 1 节）
+1. **仓库根目录（Windows）**：`D:\repos\Software-Defined-Networking`
+2. **仓库根目录（WSL）**：`/mnt/d/repos/Software-Defined-Networking`
+   代码在仓库的 `brain/`，文档在 `docs/`。
+   建议先做一条软链接，之后 `cd ~/brain` 即可，见 `03` 文档第 4 节
 3. **ONOS REST 认证是 `karaf/karaf`**，不是 Web GUI 的 `onos/rocks`。搞错会得到 401/404，曾因此误判「ONOS 没有 REST 接口」。
 4. **ONOS 端口**：6653（OpenFlow）/ 8101（SSH CLI）/ 8181（REST + GUI）
 5. **AI 无法在 WSL 里执行命令**（`wsl.exe` 被沙箱拉黑），只能读写 Windows 侧文件。
    所有 WSL 命令由人手动敲，一次 1–3 条，贴回输出再走下一步。
-6. **AI 不能写 WSL 里的文件**（UNC 是只读）。这是选 `/mnt/c` 放代码的唯一原因。
+6. **AI 不能写 WSL 里的文件**（UNC 是只读）。这是代码放在 Windows 侧 `/mnt/d` 仓库里的唯一原因。
 
 ## 已知未实测项（TBD 汇总，别当成事实用）
 
