@@ -10,8 +10,6 @@
 
 ## 目录结构
 
-以下为**当前仓库实际结构**（代码目录 `brain/` 尚未创建，规划见 [`docs/03`](docs/03_三人分工与开发计划.md) 第 4 节）：
-
 ```
 Software-Defined-Networking/
 ├── README.md            ← 本文件
@@ -22,14 +20,28 @@ Software-Defined-Networking/
 │   ├── 03_三人分工与开发计划.md     ★ N0–N7 闸门 + 十条硬口径
 │   ├── 04_范围与需求冻结.md         ★ 做什么 / 不做什么 / 怎么算做完
 │   └── 05_异步协作约定.md           ★ 节奏 / 分支与 PR / 契约测试
-└── labs/                ← 实验指导书（docx 原件）
-    ├── 实验指导 - 传统网络二层交换与软件定义网络数据转发分析对比.docx
-    ├── 实验指导 - 基于OVS与Mininet的软件定义网络数据平面仿真基础.docx
-    ├── 实验指导 - 基于ONOS的软件定义网络数据平面配置管理.docx
-    ├── 实验指导 - 基于ONOS北向接口的软件定义网络数据平面管理.docx
-    ├── 实验指导 - 基于OpenFlow协议流表、组表的软件定义网络数据转发.docx
-    ├── 实验指导 - 基于Wireshark的SDN南向协议OpenFlow通信分析.docx
-    └── 实验指导 - 面向ONOS北向接口的应用平面服务编程与接口封装.docx
+├── labs/                ← 实验指导书（docx 原件）
+│   ├── 实验指导 - 传统网络二层交换与软件定义网络数据转发分析对比.docx
+│   ├── 实验指导 - 基于OVS与Mininet的软件定义网络数据平面仿真基础.docx
+│   ├── 实验指导 - 基于ONOS的软件定义网络数据平面配置管理.docx
+│   ├── 实验指导 - 基于ONOS北向接口的软件定义网络数据平面管理.docx
+│   ├── 实验指导 - 基于OpenFlow协议流表、组表的软件定义网络数据转发.docx
+│   ├── 实验指导 - 基于Wireshark的SDN南向协议OpenFlow通信分析.docx
+│   └── 实验指导 - 面向ONOS北向接口的应用平面服务编程与接口封装.docx
+└── brain/               ← 代码根，所有 python 都在这（文件待补充，结构为规划）
+    ├── config.py            常量（唯一一处）
+    ├── onos.py              同步 REST（requests）
+    ├── onos_async.py        异步 REST（aiohttp，主链路）
+    ├── topo.py              建图 / 主机表 / 快照 / diff
+    ├── path.py              Dijkstra / 最短路径树 / 组播树
+    ├── flow.py              流表构造 / 下发 / 删除 / 重算
+    ├── group.py             组表（ovs-ofctl）
+    ├── main.py              Sanic 服务 / 路由 / 轮询挂载
+    ├── static/index.html    拓扑可视化（零 CDN、零框架）
+    ├── samples/             真实 ONOS 响应（只能是真的，不许手编）
+    ├── tests/               契约测试（每人为自己的模块写一份）
+    │   └── fixtures/        手写样本，结构照 docs/02 第 4 节
+    └── run.sh               一键启动
 ```
 
 ## 先读哪个文档
