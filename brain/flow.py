@@ -3,13 +3,49 @@
 函数契约见 docs/02_接口契约与数据结构.md。当前仅搭建结构，具体逻辑待补充。
 """
 
-
 def path_to_flows(res: dict, src_host: dict, dst_host: dict) -> list[tuple[str, dict]]:
     """将路径结果映射为按路径顺序排列的交换机流表。
 
-    TODO: 构造首跳、中间跳和末跳的 IN_PORT -> OUTPUT 规则。
+    res: dijkstra 返回的路径结果。
+    src_host/dst_host: host_table 中对应 IP 的主机位置。
+    返回 (device_id, flow_json) 列表，不执行下发。
+
+    TODO: 甲提供 config.py 后，按其实际优先级常量名接入，避免本模块硬编码。
     """
-    raise NotImplementedError
+    path = res["path"]
+    out_ports = res["out_ports"]
+    if not path:
+        raise ValueError("path must contain at least one switch")
+    if len(out_ports) != len(path) - 1:
+        raise ValueError("out_ports length must equal len(path) - 1")
+
+    flows = []
+    for index, device_id in enumerate(path):
+        if index == 0:
+            in_port = src_host["port"]
+        else:
+            in_port = out_ports[index - 1]
+
+        if index == len(path) - 1:
+            output_port = dst_host["port"]
+        else:
+            output_port = out_ports[index]
+
+        flow = {
+            "priority": 40000,
+            "timeout": 0,
+            "isPermanent": True,
+            "deviceId": device_id,
+            "selector": {
+                "criteria": [{"type": "IN_PORT", "port": str(in_port)}]
+            },
+            "treatment": {
+                "instructions": [{"type": "OUTPUT", "port": str(output_port)}]
+            },
+        }
+        flows.append((device_id, flow))
+
+    return flows
 
 
 def install_path(key: tuple[str, str], res: dict, src_host: dict, dst_host: dict, onos=None) -> dict:
