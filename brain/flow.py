@@ -105,7 +105,8 @@ async def install_path(key, res, graph, src_host, dst_host, deployed, onos, prio
         return {"ok": False, "error": error, "flow_ids": remaining}
 
     deployed[key] = {"path": list(res["path"]), "out_ports": list(res["out_ports"]),
-                     "flow_ids": flow_ids, "installed_at": time.time(), "status": "active"}
+                     "flow_ids": flow_ids, "installed_at": time.time(), "status": "active",
+                     "priority": priority, "rules": flows}
     return {"ok": True, "error": None, "flow_ids": flow_ids}
 
 
@@ -114,8 +115,11 @@ async def uninstall(key, deployed, onos):
     if key not in deployed:
         return {"ok": False, "error": "not_found", "remaining": []}
     record = deployed[key]
-    remaining = await _delete_rules(record.get("flow_ids", []), onos)
+    flow_ids = list(record.get("flow_ids", []))
+    flow_ids.extend(record.get("retired_flow_ids", []))
+    remaining = await _delete_rules(flow_ids, onos)
     record["flow_ids"] = remaining
+    record.pop("retired_flow_ids", None)
     if remaining or record.get("unknown_flows"):
         record["status"] = "cleanup_required"
         return {"ok": False, "error": "cleanup_required", "remaining": remaining}
@@ -149,7 +153,7 @@ def affected(diff, deployed):
 
 
 async def recompute(affected_keys, graph, host_table, deployed, onos, priority):
-    # 检查受影响路径并拒绝未经验证的规则切换
+    # 为受影响通信对计算新路径并逐条切换规则
     results = []
     for key in affected_keys:
         record = deployed.get(key)
@@ -171,6 +175,44 @@ async def recompute(affected_keys, graph, host_table, deployed, onos, priority):
                     result["error"] = "unreachable"
                 else:
                     result["new_path"] = new_path["path"]
-                    result["error"] = "replacement_policy_unverified"
+                    old_priority = record.get("priority", priority)
+                    current_rules = path_to_flows(key, new_path, graph, src_host, dst_host, old_priority)
+                    if current_rules == record.get("rules"):
+                        result["ok"] = True
+                        results.append(result)
+                        continue
+
+                    # 用更高优先级先安装新路径
+                    next_priority = old_priority + 1
+                    if next_priority > 65535:
+                        result["error"] = "priority_exhausted"
+                        results.append(result)
+                        continue
+                    candidate = {}
+                    installed = await install_path(key, new_path, graph, src_host, dst_host,
+                                                   candidate, onos, next_priority)
+                    if not installed["ok"]:
+                        result["error"] = installed["error"]
+                        if key in candidate:
+                            failed = candidate[key]
+                            record["retired_flow_ids"] = failed.get("flow_ids", [])
+                            record["unknown_flows"] = failed.get("unknown_flows", [])
+                            record["status"] = "cleanup_required"
+                        results.append(result)
+                        continue
+
+                    # 保留旧规则直到新路径安装并回读完成
+                    new_record = candidate[key]
+                    old_ids = list(record.get("flow_ids", []))
+                    new_record["retired_flow_ids"] = old_ids
+                    deployed[key] = new_record
+                    remaining = await _delete_rules(old_ids, onos)
+                    new_record["retired_flow_ids"] = remaining
+                    if remaining:
+                        new_record["status"] = "cleanup_required"
+                        result["error"] = "old_flow_cleanup_failed"
+                    else:
+                        new_record.pop("retired_flow_ids", None)
+                        result["ok"] = True
         results.append(result)
     return results
