@@ -38,7 +38,6 @@
 | 项 | 状态 | 怎么确认 |
 |---|---|---|
 | `POST /flows/{id}` 的响应体里是否带 flowId | ❓ 未实测 | **N4 / 乙-3** 抓一次响应，回写 `02` 第 2.4 节 |
-| `requests` 的具体版本号 | ❓ 未记录 | `python3 -c "import requests;print(requests.__version__)"` |
 | `sanic 25.12.1` 的 `single_process` 参数是否仍可用 | ❓ 未冒烟 | 起一个 hello world 试 |
 | `ovs-ofctl` 下发 group 是否需要 sudo | ❓ 推测需要 | 组播阶段实测 |
 | Mininet 拓扑里交换机 dpid 与 ONOS `of:xxxx` 的对应关系 | ❓ 未实测 | 起拓扑后对一遍 |

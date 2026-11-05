@@ -1,7 +1,11 @@
 """甲 · 感知层契约测试（离线，绝不连 ONOS）。
 
-覆盖 FR-02 / FR-03 / FR-04 / FR-05 与 docs/04 的 A3 判据。
-入参严格按 docs/02 §4 手写的 fixtures 造，不依赖真实 ONOS 响应。
+覆盖 FR-02 / FR-03 / FR-04 / FR-05 与 docs/04 的 A1 / A3 判据。
+
+两类数据来源，互不替代：
+  - tests/fixtures/：按 docs/02 §4 手写的样本，恒定可跑，是格式契约。
+  - brain/samples/：ONOS 2.7.0 的真响应（pingall 之后落盘），跑 A1 判据；
+    文件不存在时相关用例自动 skip，绝不手编冒充实测。
 
 跑法（Windows 侧零第三方依赖）：
     cd brain && python -m unittest discover -s tests -v
@@ -27,6 +31,11 @@ import fixtures.topo_tree22 as t22  # noqa: E402
 import fixtures.topo_chain3 as chain3  # noqa: E402
 
 FIXTURES = TESTS / "fixtures"
+SAMPLES = BRAIN / "samples"
+_REAL_READY = all(
+    (SAMPLES / (name + ".json")).is_file()
+    for name in ("devices", "links", "hosts")
+)
 
 DIFF_KEYS = {
     "changed",
@@ -43,6 +52,12 @@ DIFF_KEYS = {
 
 def _load(name):
     with (FIXTURES / name).open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_real(name):
+    """读 brain/samples/ 的真响应；没落盘就是没有，不许造。"""
+    with (SAMPLES / (name + ".json")).open(encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -235,6 +250,57 @@ class TestDiff(unittest.TestCase):
         d = topo.diff(topo.empty_snapshot(), _tree22_snapshot())
         decoded = json.loads(json.dumps(d))
         self.assertEqual(decoded["edges_added"], d["edges_added"])
+
+
+@unittest.skipUnless(_REAL_READY, "brain/samples/*.json 未落盘（真响应需 ONOS + Mininet）")
+class TestRealSamples(unittest.TestCase):
+    """docs/04 A1：拿 ONOS 2.7.0 真响应跑一遍，验证手写格式契约没跑偏。
+
+    样本来源：tree,2,2 起好后 pingall（0% dropped），再从
+    /onos/v1/{devices,links,hosts} 整份落盘。只允许整份替换，不许手编。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.devices = _load_real("devices")["devices"]
+        cls.links = _load_real("links")["links"]
+        cls.hosts = _load_real("hosts")["hosts"]
+
+    def test_a1_graph_node_set_equals_device_set(self):
+        g = topo.build_graph(self.links)
+        self.assertEqual(len(g), len(self.devices))
+        self.assertEqual(set(g), {d["id"] for d in self.devices})
+
+    def test_a1_host_table_equals_host_set(self):
+        ht = topo.build_host_table(self.hosts)
+        self.assertEqual(len(ht), len(self.hosts))
+        for h in self.hosts:
+            for ip in h["ipAddresses"]:
+                self.assertIn(ip, ht)
+
+    def test_every_host_attached_to_a_known_switch(self):
+        g = topo.build_graph(self.links)
+        for loc in topo.build_host_table(self.hosts).values():
+            self.assertIn(loc["dpid"], g)
+
+    def test_bidirectional_records_normalize_to_half(self):
+        snap = topo.make_snapshot(
+            topo.build_graph(self.links), topo.build_host_table(self.hosts)
+        )
+        self.assertEqual(len(snap["edges"]), len(self.links) // 2)
+        for e in snap["edges"]:
+            self.assertIsInstance(e, frozenset)
+
+    def test_real_snapshot_diff_against_itself_is_no_change(self):
+        snap = topo.make_snapshot(
+            topo.build_graph(self.links), topo.build_host_table(self.hosts)
+        )
+        self.assertFalse(topo.diff(snap, copy.deepcopy(snap))["changed"])
+
+    def test_real_response_matches_handwritten_contract(self):
+        """真响应解析结果与 fixtures 的手写字面量逐字段一致。"""
+        self.assertEqual(topo.build_graph(self.links), t22.GRAPH)
+        self.assertEqual(topo.build_host_table(self.hosts), t22.HOST_TABLE)
 
 
 if __name__ == "__main__":

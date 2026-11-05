@@ -6,9 +6,12 @@
     h1/h2 挂在 s2:1 / s2:2      h3/h4 挂在 s3:1 / s3:2
 ONOS /links 对每条物理链路按两个方向各报一次，所以 2 条物理链路 = 4 条记录。
 
-❓ 未实测：真实 tree,2,2 的 /links 记录条数与 dpid-端口对应关系以
-   samples/*.json 落盘后为准。个人计划里写的 "links 6" 与本样本不一致，
-   等真样本再定，不要拿这里的 4 条当实测结论。
+✅ 已实测（ONOS 2.7.0 + tree,2,2 + pingall 0% dropped）：
+   brain/samples/{devices,links,hosts}.json 落盘后，
+   test_topo.TestRealSamples.test_real_response_matches_handwritten_contract
+   逐字段比对通过 —— /links 是 4 条记录（2 条物理链路各报双向），
+   dpid、sport/dport、主机挂载端口与这里的字面量完全一致。
+   真响应以 samples/*.json 为准；本样本不再标「未实测」。
 """
 
 S1 = "of:0000000000000001"

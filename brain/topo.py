@@ -16,6 +16,10 @@ NOTE（契约里两处矛盾，本实现按「不改签名」处理，待 N3 前
   2. FR-02 判据是 len(graph) == 交换机数，但纯靠 links 感知不到「一台交换机都没连」的孤立节点。
      缓解：build_graph 为每条链路的 src 和 dst 都建 key，至少连通拓扑下节点数正确。
   真要彻底解决，得给 build_graph 加 devices 入参 —— 那是改冻结签名，必须先提 PR 改 docs/02。
+
+  实测补注（ONOS 2.7.0 + tree,2,2）：/devices 响应里**没有 state 字段，只有 available**；
+  /links 每条都有 state=ACTIVE、type=DIRECT。所以「按 available 过滤」在当前签名下
+  确实做不到，只能靠 links 的 state。证据见 brain/samples/ 与 TestRealSamples。
 """
 
 from __future__ import annotations

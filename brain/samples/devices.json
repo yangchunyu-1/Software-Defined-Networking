@@ -1,0 +1,64 @@
+{
+  "devices": [
+    {
+      "id": "of:0000000000000003",
+      "type": "SWITCH",
+      "available": true,
+      "role": "MASTER",
+      "mfr": "Nicira, Inc.",
+      "hw": "Open vSwitch",
+      "sw": "2.17.12",
+      "serial": "None",
+      "driver": "ovs",
+      "chassisId": "3",
+      "lastUpdate": "1793880447448",
+      "humanReadableLastUpdate": "connected 1m33s ago",
+      "annotations": {
+        "channelId": "172.17.0.1:53758",
+        "datapathDescription": "s3",
+        "managementAddress": "172.17.0.1",
+        "protocol": "OF_13"
+      }
+    },
+    {
+      "id": "of:0000000000000001",
+      "type": "SWITCH",
+      "available": true,
+      "role": "MASTER",
+      "mfr": "Nicira, Inc.",
+      "hw": "Open vSwitch",
+      "sw": "2.17.12",
+      "serial": "None",
+      "driver": "ovs",
+      "chassisId": "1",
+      "lastUpdate": "1793880447448",
+      "humanReadableLastUpdate": "connected 1m33s ago",
+      "annotations": {
+        "channelId": "172.17.0.1:53748",
+        "datapathDescription": "s1",
+        "managementAddress": "172.17.0.1",
+        "protocol": "OF_13"
+      }
+    },
+    {
+      "id": "of:0000000000000002",
+      "type": "SWITCH",
+      "available": true,
+      "role": "MASTER",
+      "mfr": "Nicira, Inc.",
+      "hw": "Open vSwitch",
+      "sw": "2.17.12",
+      "serial": "None",
+      "driver": "ovs",
+      "chassisId": "2",
+      "lastUpdate": "1793880447448",
+      "humanReadableLastUpdate": "connected 1m33s ago",
+      "annotations": {
+        "channelId": "172.17.0.1:53766",
+        "datapathDescription": "s2",
+        "managementAddress": "172.17.0.1",
+        "protocol": "OF_13"
+      }
+    }
+  ]
+}
