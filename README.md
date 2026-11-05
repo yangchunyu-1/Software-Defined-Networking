@@ -30,8 +30,7 @@ Software-Defined-Networking/
 │   └── 实验指导 - 面向ONOS北向接口的应用平面服务编程与接口封装.docx
 └── brain/               ← 代码根，所有 python 都在这（文件待补充，结构为规划）
     ├── config.py            常量（唯一一处）
-    ├── onos.py              同步 REST（requests）
-    ├── onos_async.py        异步 REST（aiohttp，主链路）
+    ├── onos_async.py        唯一 REST 客户端（aiohttp）
     ├── topo.py              建图 / 主机表 / 快照 / diff
     ├── path.py              Dijkstra / 最短路径树 / 组播树
     ├── flow.py              流表构造 / 下发 / 删除 / 重算
@@ -65,7 +64,7 @@ Software-Defined-Networking/
 | 项 | 要求 |
 |---|---|
 | WSL2 | Ubuntu 22.04，systemd 可用（Mininet / OVS 需要） |
-| Python | 3.10；`requests` / `sanic` / `aiohttp` 装在用户目录（`pip install --user`） |
+| Python | 3.10；`sanic` / `aiohttp` 装在用户目录（`pip install --user`） |
 | Mininet | 2.3.0 |
 | Open vSwitch | 2.17.x，datapath 用 `system` |
 | Docker | 用于跑 ONOS 容器；ONOS 2.7.0 镜像需提前拉到本地（离线可用） |

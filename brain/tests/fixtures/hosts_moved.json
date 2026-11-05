@@ -1,0 +1,40 @@
+{
+  "hosts": [
+    {
+      "id": "00:00:00:00:00:01/None",
+      "mac": "00:00:00:00:00:01",
+      "vlan": "None",
+      "ipAddresses": ["10.0.0.1"],
+      "locations": [{"elementId": "of:0000000000000002", "port": "1"}],
+      "configured": false,
+      "suspended": false
+    },
+    {
+      "id": "00:00:00:00:00:02/None",
+      "mac": "00:00:00:00:00:02",
+      "vlan": "None",
+      "ipAddresses": ["10.0.0.2"],
+      "locations": [{"elementId": "of:0000000000000002", "port": "2"}],
+      "configured": false,
+      "suspended": false
+    },
+    {
+      "id": "00:00:00:00:00:03/None",
+      "mac": "00:00:00:00:00:03",
+      "vlan": "None",
+      "ipAddresses": ["10.0.0.3"],
+      "locations": [{"elementId": "of:0000000000000002", "port": "4"}],
+      "configured": false,
+      "suspended": false
+    },
+    {
+      "id": "00:00:00:00:00:04/None",
+      "mac": "00:00:00:00:00:04",
+      "vlan": "None",
+      "ipAddresses": ["10.0.0.4"],
+      "locations": [{"elementId": "of:0000000000000003", "port": "2"}],
+      "configured": false,
+      "suspended": false
+    }
+  ]
+}

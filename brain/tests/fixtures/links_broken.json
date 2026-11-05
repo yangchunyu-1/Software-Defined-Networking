@@ -1,0 +1,16 @@
+{
+  "links": [
+    {
+      "src": {"device": "of:0000000000000001", "port": "1"},
+      "dst": {"device": "of:0000000000000002", "port": "3"},
+      "type": "DIRECT",
+      "state": "ACTIVE"
+    },
+    {
+      "src": {"device": "of:0000000000000002", "port": "3"},
+      "dst": {"device": "of:0000000000000001", "port": "1"},
+      "type": "DIRECT",
+      "state": "ACTIVE"
+    }
+  ]
+}
