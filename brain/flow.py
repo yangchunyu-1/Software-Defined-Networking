@@ -1,17 +1,13 @@
 import time
 
 
-# 以 (源 IP, 目的 IP) 为键，保存路径和已记录的 (设备 ID, flow ID)。
+# 按通信对保存已部署的路径和流表
 deployed = {}
 
 
 def path_to_flows(res: dict, src_host: dict, dst_host: dict) -> list[tuple[str, dict]]:
-    """将路径结果转换为每台交换机的流表请求，不执行网络操作。
-
-    res 包含 path 和 out_ports；src_host、dst_host 提供主机接入端口。
-    返回按路径顺序排列的 (device_id, flow) 列表；路径结构错误时抛出 ValueError。
-    当前中间跳入端口直接使用上一跳出端口；链路两端端口不同会导致错误，需对齐契约后修正。
-    """
+    # 将路径转换为交换机流表
+    # 待修正链路两端端口号可能不同的问题
     path = res["path"]
     out_ports = res["out_ports"]
     if not path:
@@ -19,7 +15,7 @@ def path_to_flows(res: dict, src_host: dict, dst_host: dict) -> list[tuple[str, 
     if len(out_ports) != len(path) - 1:
         raise ValueError("out_ports length must equal len(path) - 1")
 
-    # 首跳从源主机进入，末跳发往目的主机；单交换机路径同时满足两种情况。
+    # 为路径上的每台交换机构造转发规则
     flows = []
     for index, device_id in enumerate(path):
         if index == 0:
@@ -32,7 +28,7 @@ def path_to_flows(res: dict, src_host: dict, dst_host: dict) -> list[tuple[str, 
         else:
             output_port = out_ports[index]
 
-        # priority 暂用契约示例值，后续应从甲维护的配置中读取。
+        # 待从配置读取流表优先级
         flow = {
             "priority": 40000,
             "timeout": 0,
@@ -51,21 +47,17 @@ def path_to_flows(res: dict, src_host: dict, dst_host: dict) -> list[tuple[str, 
 
 
 def install_path(key: tuple[str, str], res: dict, src_host: dict, dst_host: dict, onos=None) -> dict:
-    """通过 onos 安装路径规则，并在全部返回 ID 后记录 deployed。
-
-    key 是 (源 IP, 目的 IP)；res 和两个 host 参数传给 path_to_flows。
-    onos 须提供 post_flow 和 delete_flow；返回成功记录或失败字典。
-    此函数会请求修改交换机流表及模块状态；尚未实现回读、异常回滚和安全替换旧规则。
-    """
+    # 下发路径流表并记录部署状态
+    # 待完善回读校验异常回滚和旧规则替换
     if onos is None:
         raise NotImplementedError("ONOS client is not available yet")
 
-    # 暂存已取得 ID 的规则；只有全部取得 ID 后才写入 deployed。
+    # 记录本次下发取得的流表 ID
     flow_ids = []
     for device_id, flow in path_to_flows(res, src_host, dst_host):
         flow_id = onos.post_flow(device_id, flow)
         if flow_id is None:
-            # 当前仅尝试删除先前取得 ID 的规则，未检查删除失败或处理异常。
+            # 尝试清理本次已下发的流表
             for installed_device, installed_id in reversed(flow_ids):
                 onos.delete_flow(installed_device, installed_id)
             return {"ok": False, "error": "flow_id_unavailable", "flow_ids": []}
@@ -81,17 +73,13 @@ def install_path(key: tuple[str, str], res: dict, src_host: dict, dst_host: dict
 
 
 def uninstall(key: tuple[str, str], onos=None) -> bool:
-    """按 key 的 flow ID 删除规则；onos 须提供 delete_flow。
-
-    全部删除成功返回 True；记录不存在或存在删除失败时返回 False。
-    会请求修改交换机流表和 deployed；删除失败的 ID 保留在记录中。
-    """
+    # 精确删除通信对对应的流表
     if key not in deployed:
         return False
     if onos is None:
         raise NotImplementedError("ONOS client is not available yet")
 
-    # 保留返回失败的 ID，避免把仍需处理的规则从记录中移除。
+    # 保留删除失败的流表记录
     record = deployed[key]
     all_deleted = True
     remaining = []
@@ -108,16 +96,10 @@ def uninstall(key: tuple[str, str], onos=None) -> bool:
 
 
 def affected(diff: dict, deployed: dict) -> list[tuple[str, str]]:
-    """预留受影响通信对筛选接口；输入为拓扑差异和部署记录。
-
-    尚未实现，调用会抛出 NotImplementedError。
-    """
+    # 预留受影响通信对的筛选
     raise NotImplementedError
 
 
 def recompute(affected_keys: list[tuple[str, str]], graph: dict, host_table: dict) -> list[dict]:
-    """预留路径重算接口；输入为受影响的通信对、拓扑图和主机表。
-
-    尚未实现，调用会抛出 NotImplementedError，也不会修改流表。
-    """
+    # 预留拓扑变化后的路径重算
     raise NotImplementedError
