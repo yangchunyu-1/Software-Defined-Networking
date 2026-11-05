@@ -1,16 +1,12 @@
-"""乙负责的路径计算模块。
-
-函数契约见 docs/02_接口契约与数据结构.md。当前仅搭建结构，具体逻辑待补充。
-"""
-
 import heapq
 
 
 def dijkstra(graph: dict, src: str, dst: str) -> dict | None:
-    """计算两个交换机之间的最短路径。
+    """在有向拓扑中计算从 src 到 dst 的最短路径。
 
-    graph: 有向邻接表；边数据包含 sport 和非负 weight。
-    返回路径交换机序列、总权重以及每一跳的本地出端口。
+    graph 是交换机邻接表，边包含 sport 和非负 weight；src、dst 是交换机 ID。
+    返回包含 path、cost、out_ports 的字典；节点不存在或不可达时返回 None。
+    src 和 dst 均在图中且相同时，返回代价为零的单节点路径。
     """
     if src not in graph or dst not in graph:
         return None
@@ -18,10 +14,12 @@ def dijkstra(graph: dict, src: str, dst: str) -> dict | None:
     if src == dst:
         return {"path": [src], "cost": 0, "out_ports": []}
 
+    # distances 保存目前发现的最小代价；parents 用于最终从目的节点回溯。
     distances = {src: 0}
     parents = {}
     queue = [(0, src)]
 
+    # 最小堆按代价取节点；旧条目可能仍留在堆中，取出时需要跳过。
     while queue:
         current_cost, current = heapq.heappop(queue)
         if current_cost != distances.get(current):
@@ -29,6 +27,7 @@ def dijkstra(graph: dict, src: str, dst: str) -> dict | None:
         if current == dst:
             break
 
+        # Dijkstra 依赖非负边权，只有更短的路径才更新距离与前驱。
         for neighbor, edge in graph.get(current, {}).items():
             weight = edge.get("weight", 1)
             if weight < 0:
@@ -42,11 +41,13 @@ def dijkstra(graph: dict, src: str, dst: str) -> dict | None:
     if dst not in distances:
         return None
 
+    # 沿前驱从目的节点回溯，再反转得到源到目的的交换机序列。
     path = [dst]
     while path[-1] != src:
         path.append(parents[path[-1]])
     path.reverse()
 
+    # sport 属于当前交换机；对每条路径边取其本地出端口。
     out_ports = []
     for index in range(len(path) - 1):
         edge = graph[path[index]][path[index + 1]]
@@ -56,16 +57,16 @@ def dijkstra(graph: dict, src: str, dst: str) -> dict | None:
 
 
 def shortest_path_tree(graph: dict, src: str) -> dict:
-    """计算从源交换机出发的最短路径树。
+    """预留最短路径树接口；graph 是拓扑图，src 是源交换机。
 
-    TODO: 按接口契约返回各节点的父节点、端口和距离。
+    尚未实现，调用会抛出 NotImplementedError。
     """
     raise NotImplementedError
 
 
 def multicast_tree(graph: dict, src: str, dsts: list[str]) -> dict:
-    """计算源交换机到多个目的交换机的组播树。
+    """预留组播树接口；dsts 是目的交换机 ID 列表。
 
-    TODO: 可选功能阶段再实现；当前保留接口声明。
+    尚未实现，调用会抛出 NotImplementedError。
     """
     raise NotImplementedError
