@@ -96,8 +96,44 @@ def uninstall(key: tuple[str, str], onos=None) -> bool:
 
 
 def affected(diff: dict, deployed: dict) -> list[tuple[str, str]]:
-    # 预留受影响通信对的筛选
-    raise NotImplementedError
+    # 筛选拓扑变化可能影响的通信对
+    changed_hosts = set(diff.get("hosts_removed", []))
+    changed_hosts.update(diff.get("hosts_moved", {}))
+    removed_nodes = set(diff.get("nodes_removed", []))
+    removed_edges = diff.get("edges_removed", [])
+    added_edges = diff.get("edges_added", [])
+
+    affected_keys = []
+    for key, record in deployed.items():
+        src, dst = key
+        path = record["path"]
+
+        # 新链路可能为任意通信对提供更短路径
+        if added_edges:
+            affected_keys.append(key)
+            continue
+
+        if src in changed_hosts or dst in changed_hosts:
+            affected_keys.append(key)
+            continue
+
+        if any(node in removed_nodes for node in path):
+            affected_keys.append(key)
+            continue
+
+        # 对照旧路径检查移除的物理链路
+        for index in range(len(path) - 1):
+            current = path[index]
+            neighbor = path[index + 1]
+            for edge in removed_edges:
+                if current in edge and neighbor in edge:
+                    affected_keys.append(key)
+                    break
+            else:
+                continue
+            break
+
+    return affected_keys
 
 
 def recompute(affected_keys: list[tuple[str, str]], graph: dict, host_table: dict) -> list[dict]:
