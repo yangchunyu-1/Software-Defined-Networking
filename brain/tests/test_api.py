@@ -7,10 +7,67 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 import main as main_module
 from main import app
+
+
+class _Resp:
+    """把 httpx 响应包成测试里习惯的 .status / .json / .text。"""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    @property
+    def status(self):
+        return self._raw.status_code
+
+    @property
+    def json(self):
+        # sanic 的 ASGI 响应直接把 body 挂在 .json 上；httpx 则是 .json() 方法。
+        value = self._raw.json
+        return value() if callable(value) else value
+
+    @property
+    def text(self):
+        value = getattr(self._raw, "text", "")
+        return value() if callable(value) else value
+
+
+class _AsgiClient:
+    """同步包装 Sanic 的 ASGI 客户端。
+
+    为什么不用 app.test_client：sanic 25.12 + sanic-testing 24.6 下，每次请求都会
+    起一个 worker 进程且不回收，实测连续 12 条左右就整进程卡死（套件随机挂在中途，
+    表现为 pytest 无输出、只能 timeout 掉）。ASGI 直连不起服务器，40 条连发无问题。
+    """
+
+    def __init__(self, sani_app):
+        self._client = sani_app.asgi_client
+
+    @staticmethod
+    def _wrap(pair):
+        _, raw = pair
+        return None, _Resp(raw)
+
+    def get(self, uri, **kwargs):
+        return self._wrap(asyncio.run(self._client.get(uri, **kwargs)))
+
+    def post(self, uri, **kwargs):
+        return self._wrap(asyncio.run(self._client.post(uri, **kwargs)))
+
+    def request(self, uri, http_method="GET", **kwargs):
+        # Sanic 的 ASGI 客户端签名是 request(method, url, ...)，这里转回去，
+        # 让测试调用点保持 request(uri, http_method="DELETE", ...) 的老写法。
+        return self._wrap(
+            asyncio.run(self._client.request(http_method, uri, **kwargs))
+        )
+
+
+client = _AsgiClient(app)
 
 S1 = "of:0000000000000001"
 S3 = "of:0000000000000003"
@@ -58,7 +115,7 @@ def ctx():
 
 
 def test_state_has_14_fields(ctx):
-    _, res = app.test_client.get("/api/state")
+    _, res = client.get("/api/state")
     assert res.status == 200
     assert STATE_FIELDS <= set(res.json.keys())
     assert res.json["graph"] == FAKE_GRAPH
@@ -71,13 +128,13 @@ def test_state_has_14_fields(ctx):
 def test_route_ok(ctx, monkeypatch):
     monkeypatch.setattr(main_module.path, "dijkstra", lambda g, s, d: FAKE_RES)
     monkeypatch.setattr(main_module.flow, "install_path", _fake_install)
-    _, res = app.test_client.post(
+    _, res = client.post(
         "/api/route", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 200
     assert res.json == {"ok": True, "path": [S1, S3], "cost": 1}
     # 下发记录进入 deployed，/api/state 的 paths 摘要随之可见。
-    _, state = app.test_client.get("/api/state")
+    _, state = client.get("/api/state")
     assert state.json["paths"] == [
         {"src": "10.0.0.1", "dst": "10.0.0.3", "path": [S1, S3], "installed_at": 1730000000.0}
     ]
@@ -85,7 +142,7 @@ def test_route_ok(ctx, monkeypatch):
 
 def test_route_unreachable(ctx, monkeypatch):
     monkeypatch.setattr(main_module.path, "dijkstra", lambda g, s, d: None)
-    _, res = app.test_client.post(
+    _, res = client.post(
         "/api/route", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 200  # 不可达不是异常（docs/02 §7）
@@ -93,7 +150,7 @@ def test_route_unreachable(ctx, monkeypatch):
 
 
 def test_route_unknown_host(ctx):
-    _, res = app.test_client.post(
+    _, res = client.post(
         "/api/route", json={"src": "10.0.0.1", "dst": "10.0.0.99"}
     )
     assert res.status == 404
@@ -101,7 +158,7 @@ def test_route_unknown_host(ctx):
 
 
 def test_route_missing_params(ctx):
-    _, res = app.test_client.post("/api/route", json={})
+    _, res = client.post("/api/route", json={})
     assert res.status == 400
 
 
@@ -109,7 +166,7 @@ def test_delete_route_ok(ctx, monkeypatch):
     ctx.deployed = {("10.0.0.1", "10.0.0.3"): FAKE_RECORD}
     monkeypatch.setattr(main_module.flow, "uninstall", _fake_uninstall)
     # sanic-testing 的 delete() 不收 json 参数；request() 用 http_method 指定方法。
-    _, res = app.test_client.request(
+    _, res = client.request(
         "/api/route", http_method="DELETE", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 200
@@ -118,7 +175,7 @@ def test_delete_route_ok(ctx, monkeypatch):
 
 
 def test_delete_route_not_found(ctx):
-    _, res = app.test_client.request(
+    _, res = client.request(
         "/api/route", http_method="DELETE", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 404
@@ -126,7 +183,7 @@ def test_delete_route_not_found(ctx):
 
 
 def test_diff_empty_before_first_poll(ctx):
-    _, res = app.test_client.get("/api/diff")
+    _, res = client.get("/api/diff")
     assert res.status == 200
     assert res.json == {}
 
@@ -134,7 +191,7 @@ def test_diff_empty_before_first_poll(ctx):
 def test_diff_returns_last_diff(ctx):
     fake_diff = {"changed": True, "edges_removed": [[S1, S3]], "ts": 1730000000.0}
     ctx.last_diff = fake_diff
-    _, res = app.test_client.get("/api/diff")
+    _, res = client.get("/api/diff")
     assert res.json == fake_diff
 
 
@@ -142,7 +199,7 @@ def test_route_already_exists(ctx, monkeypatch):
     """02 §3.6：已存在的 key 禁止静默覆盖，应返回 409 而不是重新下发。"""
     ctx.deployed = {("10.0.0.1", "10.0.0.3"): dict(FAKE_RECORD)}
     monkeypatch.setattr(main_module.path, "dijkstra", lambda g, s, d: FAKE_RES)
-    _, res = app.test_client.post(
+    _, res = client.post(
         "/api/route", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 409
@@ -160,7 +217,7 @@ def test_route_install_failure_keeps_cleanup_record(ctx, monkeypatch):
 
     monkeypatch.setattr(main_module.path, "dijkstra", lambda g, s, d: FAKE_RES)
     monkeypatch.setattr(main_module.flow, "install_path", _fail)
-    _, res = app.test_client.post(
+    _, res = client.post(
         "/api/route", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 502
@@ -177,7 +234,7 @@ def test_delete_route_uninstall_failure_keeps_record(ctx, monkeypatch):
         return {"ok": False, "error": "cleanup_required", "remaining": [(S1, "111")]}
 
     monkeypatch.setattr(main_module.flow, "uninstall", _partial)
-    _, res = app.test_client.request(
+    _, res = client.request(
         "/api/route", http_method="DELETE", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 502
@@ -216,17 +273,17 @@ def test_route_end_to_end_real_flow_logic(ctx, monkeypatch):
     monkeypatch.setattr(main_module.flow, "install_path", real_flow.install_path)
     monkeypatch.setattr(main_module.flow, "uninstall", real_flow.uninstall)
 
-    _, res = app.test_client.post(
+    _, res = client.post(
         "/api/route", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 200, res.json
     assert res.json == {"ok": True, "path": [S1, S3], "cost": 1}
     assert len(app.ctx.deployed[("10.0.0.1", "10.0.0.3")]["flow_ids"]) == 2
 
-    _, state = app.test_client.get("/api/state")
+    _, state = client.get("/api/state")
     assert state.json["paths"][0]["path"] == [S1, S3]
 
-    _, res = app.test_client.request(
+    _, res = client.request(
         "/api/route", http_method="DELETE", json={"src": "10.0.0.1", "dst": "10.0.0.3"}
     )
     assert res.status == 200
@@ -235,7 +292,7 @@ def test_route_end_to_end_real_flow_logic(ctx, monkeypatch):
 
 
 def test_multicast_not_implemented_in_phase1(ctx):
-    _, res = app.test_client.post(
+    _, res = client.post(
         "/api/multicast", json={"src": "10.0.0.1", "dsts": ["10.0.0.3"], "group_id": 1}
     )
     assert res.status == 501
