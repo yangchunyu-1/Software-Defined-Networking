@@ -59,7 +59,12 @@ init_ctx(app)
 
 
 async def _maybe_await(value):
-    """02 §3.6 的签名是 def；若乙后续改为 async def，这里不用改调用点。"""
+    """兼容乙的同步 / 异步两种实现，调用点不用改。
+
+    现状（2026-11-12）：flow 的 install_path / uninstall / recompute 均为 async def，
+    签名见 02 §3.6（8/3/6 参数，含 deployed 与 onos）。丙侧调用必须按该签名传参，
+    否则一调就 TypeError。
+    """
     if inspect.isawaitable(value):
         return await value
     return value
@@ -126,21 +131,44 @@ async def post_route(request):
         # 主机没 pingall 过就没有 IP，返回 404 让调用方知道先去 pingall。
         return response.json({"ok": False, "error": "unknown_host"}, status=404)
 
+    key = (src, dst)
+    if key in app.ctx.deployed:
+        # 02 §3.6：已存在的 key 禁止静默覆盖，替换只能走 recompute。
+        return response.json({"ok": False, "error": "already_exists"}, status=409)
+
     res = path.dijkstra(app.ctx.graph, src_host["dpid"], dst_host["dpid"])
     if res is None:
         return response.json({"ok": False, "error": "unreachable"})
 
+    # 02 §3.6 / §6.2：install_path 自己把 record 写进传入的 deployed（乙侧写入，
+    # 丙侧不再写第二遍）。这里传工作副本，成功后整体替换引用（口径 8）；
+    # 失败时副本里可能留有 cleanup_required 记录——必须写回，否则那些规则永远删不掉。
+    work = dict(app.ctx.deployed)
     try:
-        record = await _maybe_await(
-            flow.install_path((src, dst), res, src_host, dst_host)
+        result = await _maybe_await(
+            flow.install_path(
+                key,
+                res,
+                app.ctx.graph,
+                src_host,
+                dst_host,
+                work,
+                onos_async,
+                config.FLOW_PRIORITY,
+            )
         )
     except OnosError as exc:
         # install_path 内部已按 §7 回滚，这里只上报错误原文。
         log.error("install_path failed for %s->%s: %s", src, dst, exc)
         return response.json({"ok": False, "error": str(exc)[:200]}, status=502)
 
-    # 02 §3.6：install_path 出参写入 deployed；这里整体替换引用，不原地改。
-    app.ctx.deployed = {**app.ctx.deployed, (src, dst): record}
+    app.ctx.deployed = work
+    if not result.get("ok"):
+        log.error("install_path refused %s->%s: %s", src, dst, result.get("error"))
+        return response.json(
+            {"ok": False, "error": result.get("error") or "install_failed"}, status=502
+        )
+
     log.info("route installed %s->%s path=%s", src, dst, res["path"])
     return response.json({"ok": True, "path": res["path"], "cost": res["cost"]})
 
@@ -155,10 +183,28 @@ async def delete_route(request):
     if key not in app.ctx.deployed:
         return response.json({"ok": False, "error": "not_found"}, status=404)
 
-    ok = await _maybe_await(flow.uninstall(key))
-    if not ok:
-        return response.json({"ok": False, "error": "uninstall_failed"}, status=502)
-    app.ctx.deployed = {k: v for k, v in app.ctx.deployed.items() if k != key}
+    # uninstall 返回 {"ok","error","remaining"}，不是 bool；且它会原地改 record、
+    # 全部删净时 del deployed[key]。传副本以保持「只整体替换引用」（口径 8）。
+    work = dict(app.ctx.deployed)
+    work[key] = dict(work[key])
+    try:
+        result = await _maybe_await(flow.uninstall(key, work, onos_async))
+    except OnosError as exc:
+        log.error("uninstall failed for %s->%s: %s", src, dst, exc)
+        return response.json({"ok": False, "error": str(exc)[:200]}, status=502)
+
+    app.ctx.deployed = work
+    if not result.get("ok"):
+        log.error("uninstall incomplete %s->%s: %s", src, dst, result.get("error"))
+        return response.json(
+            {
+                "ok": False,
+                "error": result.get("error") or "uninstall_failed",
+                "remaining": result.get("remaining", []),
+            },
+            status=502,
+        )
+
     log.info("route removed %s->%s", src, dst)
     return response.json({"ok": True})
 
@@ -245,7 +291,19 @@ async def poll_loop(app: Sanic) -> None:
                 )
                 keys = await _maybe_await(flow.affected(d, app.ctx.deployed))
                 if keys:
-                    records = await _maybe_await(flow.recompute(keys, graph, host_table))
+                    # recompute 会替换 / 标记 record，同样走副本 + 整体替换引用。
+                    work = {k: dict(v) for k, v in app.ctx.deployed.items()}
+                    records = await _maybe_await(
+                        flow.recompute(
+                            keys,
+                            graph,
+                            host_table,
+                            work,
+                            onos_async,
+                            config.FLOW_PRIORITY,
+                        )
+                    )
+                    app.ctx.deployed = work
                     log.info("recompute: %s", records)
         except OnosError as exc:
             app.ctx.onos_ok = False
