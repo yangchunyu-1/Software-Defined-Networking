@@ -283,9 +283,10 @@ async def set_port_state(device_id: str, port_id: str, enabled: bool) -> bool:
 
     按 docs/02 §2 端点表第 7 行。原先只有同步版 onos.py 有这个函数，
     单客户端方案下补进异步版，N7 不再依赖 requests。
-    ❓ 本函数仍未实测（2026-11-12：/links 为空，`--port-state` 会 SKIP）。
-    `post_flow`（201、空 body）与 `delete_flow`（204、立即生效）均已实测；
-    端口 down/up 留到起好 Mininet 拓扑后的 N7 验证。
+    ✅ 2026-11-12 已实测：带 `--port-state` 的写操作 SMOKE 输出 `WRITES SMOKE OK`，
+    在起好 Mininet 拓扑（/links 4 条）后跑通端口 down/up，脚本 finally 强制恢复，
+    复跑后 /links 仍为 4 条。`post_flow`（201、空 body）与
+    `delete_flow`（204、立即生效）同样已实测。
     """
     path = f"/devices/{device_id}/portstate/{port_id}"
     await _request(
