@@ -65,6 +65,7 @@ Software-Defined-Networking/
 |---|---|
 | WSL2 | Ubuntu 22.04，systemd 可用（Mininet / OVS 需要） |
 | Python | 3.10；`sanic` / `aiohttp` 装在用户目录（`pip install --user`） |
+| 测试依赖 | `pytest` 与 `sanic-testing`（`app.test_client` 由它提供），同样装在用户目录；版本要求见 [`docs/01` §3](docs/01_技术选型报告.md) |
 | Mininet | 2.3.0 |
 | Open vSwitch | 2.17.x，datapath 用 `system` |
 | Docker | 用于跑 ONOS 容器；ONOS 2.7.0 镜像需提前拉到本地（离线可用） |

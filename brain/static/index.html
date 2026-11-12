@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>SDN Brain · 占位自检页</title>
+</head>
+<body>
+  <h1>SDN Brain 运行中</h1>
+  <p>这是占位页：拓扑可视化界面属后续迭代。当前用于自检 /api/state 是否可用。</p>
+  <pre id="state">loading...</pre>
+  <script>
+    // 零框架零 CDN，仅拉一次状态全量；后续可视化在此文件上扩展。
+    fetch("/api/state")
+      .then(r => r.json())
+      .then(d => { document.getElementById("state").textContent = JSON.stringify(d, null, 2); })
+      .catch(e => { document.getElementById("state").textContent = "fetch failed: " + e; });
+  </script>
+</body>
+</html>

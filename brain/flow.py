@@ -1,45 +1,218 @@
-"""乙负责的流表构造与生命周期管理模块。
+import ipaddress
+import time
 
-函数契约见 docs/02_接口契约与数据结构.md。当前仅搭建结构，具体逻辑待补充。
-"""
-
-
-def path_to_flows(res: dict, src_host: dict, dst_host: dict) -> list[tuple[str, dict]]:
-    """将路径结果映射为按路径顺序排列的交换机流表。
-
-    TODO: 构造首跳、中间跳和末跳的 IN_PORT -> OUTPUT 规则。
-    """
-    raise NotImplementedError
+try:
+    from .path import dijkstra
+except ImportError:
+    from path import dijkstra
 
 
-def install_path(key: tuple[str, str], res: dict, src_host: dict, dst_host: dict, onos=None) -> dict:
-    """安装一对主机的路径流表并维护 deployed 记录。
+def path_to_flows(key, res, graph, src_host, dst_host, priority):
+    # 将通信对和路径转换为交换机规则
+    src_ip = str(ipaddress.IPv4Address(key[0])) + "/32"
+    dst_ip = str(ipaddress.IPv4Address(key[1])) + "/32"
+    path = res["path"]
+    out_ports = res["out_ports"]
+    if not path or len(out_ports) != len(path) - 1:
+        raise ValueError("invalid path or out_ports")
+    if path[0] != src_host["dpid"] or path[-1] != dst_host["dpid"]:
+        raise ValueError("host locations do not match path")
 
-    TODO: 调用 ONOS 下发并回读校验规则。
-    TODO: 处理部分失败回滚，并在成功后记录 flow ID。
-    """
-    raise NotImplementedError
+    flows = []
+    for index, device_id in enumerate(path):
+        if index == 0:
+            in_port = src_host["port"]
+        else:
+            previous = path[index - 1]
+            in_port = graph[previous][device_id]["dport"]
+
+        if index == len(path) - 1:
+            output_port = dst_host["port"]
+        else:
+            neighbor = path[index + 1]
+            output_port = graph[device_id][neighbor]["sport"]
+            if output_port != out_ports[index]:
+                raise ValueError("path ports do not match graph")
+
+        criteria = [
+            {"type": "IN_PORT", "port": str(in_port)},
+            {"type": "ETH_TYPE", "ethType": "0x0800"},
+            {"type": "IPV4_SRC", "ip": src_ip},
+            {"type": "IPV4_DST", "ip": dst_ip},
+        ]
+        flow = {
+            "priority": priority,
+            "timeout": 0,
+            "isPermanent": True,
+            "deviceId": device_id,
+            "selector": {"criteria": criteria},
+            "treatment": {"instructions": [{"type": "OUTPUT", "port": str(output_port)}]},
+        }
+        flows.append((device_id, flow))
+    return flows
 
 
-def uninstall(key: tuple[str, str], onos=None) -> bool:
-    """按记录中的 flow ID 精确删除指定通信对的规则。
-
-    TODO: 删除成功后同步更新 deployed 状态。
-    """
-    raise NotImplementedError
-
-
-def affected(diff: dict, deployed: dict) -> list[tuple[str, str]]:
-    """筛选拓扑差异影响到的已部署通信对。
-
-    TODO: 根据路径、变化的节点/链路和主机位置判断受影响项。
-    """
-    raise NotImplementedError
+async def _delete_rules(flow_ids, onos):
+    # 保留无法确认删除的规则
+    remaining = []
+    for device_id, flow_id in flow_ids:
+        try:
+            deleted = await onos.delete_flow(device_id, flow_id)
+        except Exception:
+            deleted = False
+        if not deleted:
+            remaining.append((device_id, flow_id))
+    return remaining
 
 
-def recompute(affected_keys: list[tuple[str, str]], graph: dict, host_table: dict) -> list[dict]:
-    """重算受影响通信对的路径并更新流表。
+async def install_path(key, res, graph, src_host, dst_host, deployed, onos, priority):
+    # 安装并回读验证一条新路径
+    if key in deployed:
+        return {"ok": False, "error": "already_exists", "flow_ids": []}
+    flows = path_to_flows(key, res, graph, src_host, dst_host, priority)
+    flow_ids = []
+    unknown = []
+    error = None
+    for device_id, flow in flows:
+        try:
+            flow_id = await onos.post_flow(device_id, flow)
+        except Exception:
+            unknown.append((device_id, flow))
+            error = "post_result_unknown"
+            break
+        if flow_id is None:
+            unknown.append((device_id, flow))
+            error = "flow_id_unknown"
+            break
+        flow_id = str(flow_id)
+        flow_ids.append((device_id, flow_id))
+        try:
+            installed = await onos.fetch_flows(device_id)
+            ids = [str(item.get("id")) for item in installed]
+            if flow_id not in ids:
+                error = "flow_not_confirmed"
+                break
+        except Exception:
+            error = "flow_read_failed"
+            break
 
-    TODO: 按项目规则处理新旧流替换、失败回滚和结果记录。
-    """
-    raise NotImplementedError
+    if error is not None:
+        remaining = await _delete_rules(flow_ids, onos)
+        if remaining or unknown:
+            deployed[key] = {"path": list(res["path"]), "out_ports": list(res["out_ports"]),
+                             "flow_ids": remaining, "unknown_flows": unknown,
+                             "status": "cleanup_required", "installed_at": time.time()}
+        return {"ok": False, "error": error, "flow_ids": remaining}
+
+    deployed[key] = {"path": list(res["path"]), "out_ports": list(res["out_ports"]),
+                     "flow_ids": flow_ids, "installed_at": time.time(), "status": "active",
+                     "priority": priority, "rules": flows}
+    return {"ok": True, "error": None, "flow_ids": flow_ids}
+
+
+async def uninstall(key, deployed, onos):
+    # 删除已知规则并保留未确认的状态
+    if key not in deployed:
+        return {"ok": False, "error": "not_found", "remaining": []}
+    record = deployed[key]
+    flow_ids = list(record.get("flow_ids", []))
+    flow_ids.extend(record.get("retired_flow_ids", []))
+    remaining = await _delete_rules(flow_ids, onos)
+    record["flow_ids"] = remaining
+    record.pop("retired_flow_ids", None)
+    if remaining or record.get("unknown_flows"):
+        record["status"] = "cleanup_required"
+        return {"ok": False, "error": "cleanup_required", "remaining": remaining}
+    del deployed[key]
+    return {"ok": True, "error": None, "remaining": []}
+
+
+def affected(diff, deployed):
+    # 筛选拓扑变化可能影响的通信对
+    changed_hosts = set(diff.get("hosts_removed", []))
+    changed_hosts.update(diff.get("hosts_moved", {}))
+    removed_nodes = set(diff.get("nodes_removed", []))
+    removed_edges = diff.get("edges_removed", [])
+    added_edges = diff.get("edges_added", [])
+    affected_keys = []
+    for key, record in deployed.items():
+        path = record["path"]
+        if added_edges or key[0] in changed_hosts or key[1] in changed_hosts:
+            affected_keys.append(key)
+            continue
+        if any(node in removed_nodes for node in path):
+            affected_keys.append(key)
+            continue
+        for index in range(len(path) - 1):
+            current = path[index]
+            neighbor = path[index + 1]
+            if any(current in edge and neighbor in edge for edge in removed_edges):
+                affected_keys.append(key)
+                break
+    return affected_keys
+
+
+async def recompute(affected_keys, graph, host_table, deployed, onos, priority):
+    # 为受影响通信对计算新路径并逐条切换规则
+    results = []
+    for key in affected_keys:
+        record = deployed.get(key)
+        result = {"key": key, "old_path": None, "new_path": None, "ok": False, "error": None}
+        if record is None:
+            result["error"] = "not_found"
+        elif record.get("status", "active") != "active":
+            result["old_path"] = record["path"]
+            result["error"] = "cleanup_required"
+        else:
+            result["old_path"] = record["path"]
+            src_host = host_table.get(key[0])
+            dst_host = host_table.get(key[1])
+            if src_host is None or dst_host is None:
+                result["error"] = "host_not_found"
+            else:
+                new_path = dijkstra(graph, src_host["dpid"], dst_host["dpid"])
+                if new_path is None:
+                    result["error"] = "unreachable"
+                else:
+                    result["new_path"] = new_path["path"]
+                    old_priority = record.get("priority", priority)
+                    current_rules = path_to_flows(key, new_path, graph, src_host, dst_host, old_priority)
+                    if current_rules == record.get("rules"):
+                        result["ok"] = True
+                        results.append(result)
+                        continue
+
+                    # 用更高优先级先安装新路径
+                    next_priority = old_priority + 1
+                    if next_priority > 65535:
+                        result["error"] = "priority_exhausted"
+                        results.append(result)
+                        continue
+                    candidate = {}
+                    installed = await install_path(key, new_path, graph, src_host, dst_host,
+                                                   candidate, onos, next_priority)
+                    if not installed["ok"]:
+                        result["error"] = installed["error"]
+                        if key in candidate:
+                            failed = candidate[key]
+                            record["retired_flow_ids"] = failed.get("flow_ids", [])
+                            record["unknown_flows"] = failed.get("unknown_flows", [])
+                            record["status"] = "cleanup_required"
+                        results.append(result)
+                        continue
+
+                    # 保留旧规则直到新路径安装并回读完成
+                    new_record = candidate[key]
+                    old_ids = list(record.get("flow_ids", []))
+                    new_record["retired_flow_ids"] = old_ids
+                    deployed[key] = new_record
+                    remaining = await _delete_rules(old_ids, onos)
+                    new_record["retired_flow_ids"] = remaining
+                    if remaining:
+                        new_record["status"] = "cleanup_required"
+                        result["error"] = "old_flow_cleanup_failed"
+                    else:
+                        new_record.pop("retired_flow_ids", None)
+                        result["ok"] = True
+        results.append(result)
+    return results
