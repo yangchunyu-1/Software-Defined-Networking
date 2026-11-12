@@ -60,13 +60,16 @@ class OnosError(Exception):
 def flow_id_from_response(payload: Any) -> str | None:
     """从 POST /flows 响应里取 flowId。
 
-    docs/02 §2.4 标 ❓ 未实测：预期 {"flows":[{...,"id":"123"}]}，
-    也可能直接是 {"id": "123"} 或 200 空 body。取不到交给 match_flow_id 反查。
+    ✅ 实测（2026-11-12，ONOS 2.7.0）：POST 返回 2xx 但**响应体无可用 JSON**，
+    取不到 id，必须走 match_flow_id 的 GET 反查。docs/02 §2.4 的 ❓ 已结。
+    这里仍兼容文档原先预期的 {"flows":[{...,"id":"123"}]} / {"id":"123"}，
+    以及个别版本可能给的 {"flowId":"123"}。
     """
     if not isinstance(payload, dict):
         return None
-    if payload.get("id") is not None:
-        return str(payload["id"])
+    for key in ("id", "flowId"):
+        if payload.get(key) is not None:
+            return str(payload[key])
     flows = payload.get("flows")
     if isinstance(flows, list) and flows:
         first = flows[0]
@@ -75,19 +78,96 @@ def flow_id_from_response(payload: Any) -> str | None:
     return None
 
 
-def match_flow_id(flows: list[dict], new_flow: dict) -> str | None:
-    """POST 响应没给 id 时的退路：GET 反查，按 selector+treatment 精确匹配。
+def _canon(value: Any):
+    """把 ONOS 归一化过的字段还原成可比较的结构。
 
-    匹配不上宁可返回 None（由调用方 log.warning），也不猜 —— 猜错会让
-    delete_flow 删掉别的通信对的流表。
+    实测：提交时写 ethType="0x0800"，GET 回来可能是 "0x800" / 2048；
+    treatment 还会多出 deferred / clear 等键。直接拿两个 dict 做 == 永远匹配不上。
     """
-    selector = new_flow.get("selector")
-    treatment = new_flow.get("treatment")
+    if isinstance(value, dict):
+        return tuple(sorted((key, _canon(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_canon(item) for item in value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lower().startswith("0x"):
+            try:
+                return int(text, 16)
+            except ValueError:
+                pass
+        elif text.isdigit():
+            return int(text)
+        return text.lower()
+    return value
+
+
+def _criteria_key(selector: Any) -> tuple:
+    if not isinstance(selector, dict):
+        return ()
+    items = [_canon(item) for item in (selector.get("criteria") or [])]
+    return tuple(sorted(items, key=repr))
+
+
+def _treatment_key(treatment: Any) -> tuple:
+    """只比 instructions：ONOS 会追加 deferred 等键，比较整个 treatment 会误判。
+
+    ⚠ 实测（2026-11-12，ONOS 2.7.0）：提交空 `instructions: []` 时，GET 回来是
+    `{"instructions":[{"type":"NOACTION"}],"deferred":[]}`。NOACTION 就是空指令的
+    规范化写法，必须过滤掉，否则 want=() 而 got 非空，自己刚下发的规则会被跳过
+    （19:36 第二轮 SMOKE 即因此 `flowId=None`）。
+    """
+    if not isinstance(treatment, dict):
+        return ()
+    items = []
+    for item in (treatment.get("instructions") or []):
+        if (isinstance(item, dict) and len(item) == 1
+                and str(item.get("type", "")).upper() == "NOACTION"):
+            continue
+        items.append(_canon(item))
+    return tuple(sorted(items, key=repr))
+
+
+def _items_match(want: tuple, got: tuple) -> bool:
+    """我们提交的每个字段都要在返回的同一条 criterion/instruction 里出现且相等；
+    返回里多出来的键（ONOS 补的）忽略。"""
+    left, right = dict(want), dict(got)
+    if "type" in left and "type" in right and left["type"] != right["type"]:
+        return False
+    return all(key in right and right[key] == value for key, value in left.items())
+
+
+def _subset_match(want: tuple, got: tuple) -> bool:
+    if want:
+        return all(any(_items_match(item, actual) for actual in got) for item in want)
+    return not got
+
+
+def match_flow_id(flows: list[dict], new_flow: dict) -> str | None:
+    """POST 响应没给 id 时的退路：GET 反查。
+
+    按**归一化后**的 selector/treatment 匹配：我们提交的 criteria 与 instructions
+    只要被返回规则包含即可（ONOS 会改写字段、补键），再用 priority 排除同一
+    appId 下别的通信对。匹配不上宁可返回 None（调用方 log.warning），也不猜 ——
+    猜错会让 delete_flow 删掉别人的流表。
+    """
+    want_sel = _criteria_key(new_flow.get("selector"))
+    want_trt = _treatment_key(new_flow.get("treatment"))
+    want_priority = new_flow.get("priority")
     for item in flows:
         if not isinstance(item, dict) or item.get("id") is None:
             continue
-        if item.get("selector") == selector and item.get("treatment") == treatment:
-            return str(item["id"])
+        got_sel = _criteria_key(item.get("selector"))
+        got_trt = _treatment_key(item.get("treatment"))
+        if not _subset_match(want_sel, got_sel) or not _subset_match(want_trt, got_trt):
+            continue
+        if want_priority is not None and item.get("priority") is not None:
+            if _canon(item["priority"]) != _canon(want_priority):
+                continue
+        return str(item["id"])
     return None
 
 
@@ -173,7 +253,12 @@ async def post_flow(device_id: str, flow: dict) -> str | None:
 
     try:
         existing = await _request("GET", path, params=params)
-        flows = existing.get("flows", []) if isinstance(existing, dict) else []
+        if isinstance(existing, dict):
+            flows = existing.get("flows", []) or []
+        elif isinstance(existing, list):
+            flows = existing  # 个别版本直接返回数组
+        else:
+            flows = []
         flow_id = match_flow_id(flows, flow)
     except OnosError as exc:
         log.warning("post_flow fallback GET failed on %s: %s", device_id, exc)
@@ -198,7 +283,9 @@ async def set_port_state(device_id: str, port_id: str, enabled: bool) -> bool:
 
     按 docs/02 §2 端点表第 7 行。原先只有同步版 onos.py 有这个函数，
     单客户端方案下补进异步版，N7 不再依赖 requests。
-    ❓ 写操作未实测：SMOKE 只读、不下发也不改端口，留到 N7 演示时验证。
+    ❓ 本函数仍未实测（2026-11-12：/links 为空，`--port-state` 会 SKIP）。
+    `post_flow`（201、空 body）与 `delete_flow`（204、立即生效）均已实测；
+    端口 down/up 留到起好 Mininet 拓扑后的 N7 验证。
     """
     path = f"/devices/{device_id}/portstate/{port_id}"
     await _request(
