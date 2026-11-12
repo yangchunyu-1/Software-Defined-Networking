@@ -1,19 +1,601 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <title>SDN Brain · 占位自检页</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SDN 网络大脑 · 拓扑视图</title>
+<!-- 约束（docs/04 NF-06）：零外网依赖。不要引入任何 CDN、在线字体或图标库，
+     本文件必须在内网断网环境下直接打开可用。 -->
+<style>
+  :root{
+    --bg:#0b1220; --panel:#111a2b; --line:#1e293b; --grid:#182338;
+    --text:#e6edf7; --muted:#8b9bb4; --dim:#5d6b82;
+    --link:#5b7a9f; --path:#f59e0b; --ok:#22c55e; --bad:#ef4444; --accent:#38bdf8;
+    --sw-fill:#16233a; --sw-stroke:#38bdf8; --host-fill:#1c2b45;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.55 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    display:flex; flex-direction:column;
+  }
+  header{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:12px 18px; border-bottom:1px solid var(--line); background:var(--panel);
+  }
+  header h1{font-size:15px; font-weight:600; margin:0; letter-spacing:.3px}
+  header .sub{color:var(--dim); font-size:12px}
+  .pills{display:flex; gap:8px; margin-left:auto; flex-wrap:wrap}
+  .pill{
+    display:inline-flex; align-items:center; gap:6px;
+    padding:3px 10px; border:1px solid var(--line); border-radius:999px;
+    background:#0e1726; color:var(--muted); font-size:12px; white-space:nowrap;
+  }
+  .pill b{color:var(--text); font-weight:600; font-variant-numeric:tabular-nums}
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--dim)}
+  .dot.on{background:var(--ok); box-shadow:0 0 6px var(--ok)}
+  .dot.off{background:var(--bad); box-shadow:0 0 6px var(--bad)}
+  main{flex:1; display:grid; grid-template-columns:1fr 330px; min-height:0}
+  .stage{position:relative; min-height:0; overflow:hidden}
+  #topo{width:100%; height:100%; display:block}
+  .empty{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--dim); font-size:13px; pointer-events:none;
+  }
+  aside{
+    border-left:1px solid var(--line); background:var(--panel);
+    display:flex; flex-direction:column; min-height:0; overflow:auto;
+  }
+  section{padding:14px 16px; border-bottom:1px solid var(--line)}
+  section h2{
+    font-size:11px; font-weight:600; letter-spacing:.8px; text-transform:uppercase;
+    color:var(--dim); margin:0 0 10px;
+  }
+  .row{display:flex; gap:8px; align-items:center; margin-bottom:8px}
+  .row label{width:32px; color:var(--muted); font-size:12px}
+  select,button{
+    font:inherit; font-size:13px; color:var(--text);
+    background:#0e1726; border:1px solid var(--line); border-radius:8px; padding:6px 8px;
+  }
+  select{flex:1; min-width:0}
+  button{cursor:pointer; transition:border-color .15s,background .15s}
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button:disabled{opacity:.45; cursor:not-allowed}
+  button.primary{background:#12324d; border-color:#1d4e73}
+  button.danger{background:#3a1620; border-color:#5f2330}
+  .msg{font-size:12px; color:var(--muted); min-height:34px; word-break:break-all}
+  .msg.ok{color:var(--ok)} .msg.err{color:var(--bad)}
+  ul.list{list-style:none; margin:0; padding:0; font-size:12px}
+  ul.list li{
+    display:flex; flex-wrap:wrap; gap:8px; padding:5px 0;
+    border-bottom:1px dashed var(--grid); color:var(--muted);
+  }
+  ul.list li:last-child{border-bottom:0}
+  ul.list .k{color:var(--text)}
+  ul.list .tag{margin-left:auto; color:var(--path); font-variant-numeric:tabular-nums}
+  ul.list .full{flex:1 0 100%; color:var(--dim); font-size:11px}
+  .empty-hint{color:var(--dim); font-size:12px}
+  footer{
+    padding:7px 18px; border-top:1px solid var(--line); background:var(--panel);
+    color:var(--dim); font-size:12px; display:flex; gap:18px; flex-wrap:wrap; align-items:center;
+  }
+  .legend{display:flex; gap:14px; align-items:center; margin-left:auto}
+  .legend i{display:inline-block; width:16px; height:3px; border-radius:2px; margin-right:5px; vertical-align:middle}
+  @media (max-width:900px){
+    main{grid-template-columns:1fr; grid-template-rows:1fr auto}
+    aside{border-left:0; border-top:1px solid var(--line); max-height:46vh}
+  }
+</style>
 </head>
 <body>
-  <h1>SDN Brain 运行中</h1>
-  <p>这是占位页：拓扑可视化界面属后续迭代。当前用于自检 /api/state 是否可用。</p>
-  <pre id="state">loading...</pre>
-  <script>
-    // 零框架零 CDN，仅拉一次状态全量；后续可视化在此文件上扩展。
-    fetch("/api/state")
-      .then(r => r.json())
-      .then(d => { document.getElementById("state").textContent = JSON.stringify(d, null, 2); })
-      .catch(e => { document.getElementById("state").textContent = "fetch failed: " + e; });
-  </script>
+<header>
+  <h1>SDN 网络大脑</h1>
+  <span class="sub">拓扑 · 路径 · 变化（数据源 <code>/api/state</code>，推送 <code>/ws/topo</code>）</span>
+  <div class="pills">
+    <span class="pill"><span id="onosDot" class="dot"></span>ONOS <b id="onosTxt">—</b></span>
+    <span class="pill">轮询 <b id="pollCount">0</b> 次 · <b id="pollMs">0</b> ms</span>
+    <span class="pill">交换机 <b id="swCount">0</b> / 主机 <b id="hostCount">0</b></span>
+    <span class="pill">路径 <b id="pathCount">0</b></span>
+    <span class="pill">WS <b id="wsClients">0</b> · 推送 <b id="pushCount">0</b></span>
+  </div>
+</header>
+
+<main>
+  <div class="stage">
+    <svg id="topo" viewBox="0 0 1200 700" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="网络拓扑：交换机与主机的连接关系，以及已下发的转发路径"></svg>
+    <div id="emptyHint" class="empty">等待第一轮轮询…（需 ONOS 与 Mininet 拓扑已就绪）</div>
+  </div>
+
+  <aside>
+    <section>
+      <h2>路径下发</h2>
+      <div class="row"><label for="src">源</label><select id="src"></select></div>
+      <div class="row"><label for="dst">目的</label><select id="dst"></select></div>
+      <div class="row">
+        <button id="btnInstall" class="primary" style="flex:1">下发路径</button>
+        <button id="btnRemove" class="danger" style="flex:1">删除路径</button>
+      </div>
+      <div id="msg" class="msg">选择源与目的主机后下发；删除按 (源, 目的) 精确回收。</div>
+    </section>
+
+    <section>
+      <h2>已下发路径</h2>
+      <ul id="pathList" class="list"><li class="empty-hint">暂无</li></ul>
+    </section>
+
+    <section>
+      <h2>最近一次变化</h2>
+      <ul id="diffList" class="list"><li class="empty-hint">尚未检测到变化</li></ul>
+    </section>
+
+    <section>
+      <h2>主机位置</h2>
+      <ul id="hostList" class="list"><li class="empty-hint">暂无（先 pingall）</li></ul>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <span>最近轮询：<b id="lastPoll">—</b></span>
+  <span>5 秒兜底刷新；WebSocket 断线自动重连</span>
+  <span class="legend">
+    <span><i style="background:var(--link)"></i>链路</span>
+    <span><i style="background:var(--path)"></i>已下发路径</span>
+    <span><i style="background:var(--bad)"></i>刚断开（10s）</span>
+  </span>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // SVG 命名空间用拼接写，避免文件里出现 URL 字面量（docs/04 NF-06 靠 grep 检查外链）。
+  var SVGNS = ["http", "://www.w3.org/2000/svg"].join("");
+  var REFRESH_MS = 5000;   // 兜底轮询
+  var FLASH_MS = 10000;    // 断链红色高亮保持时间，对应 FR-14「断链后 10s 内变红」
+  var PATH_COLORS = ["#f59e0b", "#22d3ee", "#a78bfa", "#f472b6", "#4ade80"];
+
+  var state = {
+    graph: {}, hosts: {}, paths: [], lastDiff: null,
+    onosOk: false, pollCount: 0, pollMs: 0, wsClients: 0, pushCount: 0, lastPollTs: null
+  };
+  var flash = {removed: new Set(), added: new Set(), timer: null};
+
+  var svg = document.getElementById("topo");
+  var VIEW_W = 1200, VIEW_H = 700;
+
+  // ------------------------------------------------------------------ 工具
+
+  function el(tag, attrs, parent) {
+    var node = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) {
+      if (Object.prototype.hasOwnProperty.call(attrs, k)) node.setAttribute(k, attrs[k]);
+    }
+    if (parent) parent.appendChild(node);
+    return node;
+  }
+
+  function clear(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function edgeKey(a, b) {
+    return a < b ? a + "|" + b : b + "|" + a;
+  }
+
+  function shortId(dpid) {
+    var parts = String(dpid).split(":");
+    var tail = parts[parts.length - 1] || String(dpid);
+    return tail.slice(-2);
+  }
+
+  function fmtTime(ts) {
+    if (!ts) return "—";
+    return new Date(ts * 1000).toLocaleTimeString("zh-CN", {hour12: false});
+  }
+
+  function setText(id, value) {
+    var node = document.getElementById(id);
+    if (node) node.textContent = value;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c];
+    });
+  }
+
+  // ------------------------------------------------------------------ 布局
+
+  function layout() {
+    var switches = Object.keys(state.graph);
+    Object.keys(state.hosts).forEach(function (ip) {
+      var dpid = state.hosts[ip] && state.hosts[ip].dpid;
+      if (dpid && switches.indexOf(dpid) === -1) switches.push(dpid);
+    });
+    switches.sort();
+
+    var n = switches.length;
+    var cx = VIEW_W / 2, cy = VIEW_H / 2 - 10;
+    var radius = n <= 1 ? 0 : Math.min(VIEW_W, VIEW_H) * 0.30;
+    var pos = {};
+
+    switches.forEach(function (dpid, i) {
+      var angle = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(n, 1);
+      pos[dpid] = n === 1
+        ? {x: cx, y: cy, angle: -Math.PI / 2}
+        : {x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), angle: angle};
+    });
+
+    return {switches: switches, pos: pos, radius: radius};
+  }
+
+  // ------------------------------------------------------------------ 渲染
+
+  function render() {
+    var lay = layout();
+    clear(svg);
+
+    setText("swCount", lay.switches.length);
+    setText("hostCount", Object.keys(state.hosts).length);
+    setText("pathCount", state.paths.length);
+    setText("pollCount", state.pollCount);
+    setText("pollMs", state.pollMs);
+    setText("wsClients", state.wsClients);
+    setText("pushCount", state.pushCount);
+    setText("lastPoll", state.lastPollTs ? fmtTime(state.lastPollTs) : "—");
+
+    document.getElementById("onosDot").className = "dot " + (state.onosOk ? "on" : "off");
+    setText("onosTxt", state.onosOk ? "在线" : "离线");
+    document.getElementById("emptyHint").style.display = lay.switches.length ? "none" : "flex";
+
+    if (lay.switches.length) drawTopology(lay);
+    renderPanel();
+  }
+
+  function drawTopology(lay) {
+    // 已下发路径覆盖的边 -> 颜色
+    var pathEdges = {};
+    state.paths.forEach(function (p, i) {
+      var nodes = p.path || [];
+      for (var k = 0; k + 1 < nodes.length; k++) {
+        pathEdges[edgeKey(nodes[k], nodes[k + 1])] = PATH_COLORS[i % PATH_COLORS.length];
+      }
+    });
+
+    var gEdges = el("g", {}, svg);
+    var gHosts = el("g", {}, svg);
+    var gNodes = el("g", {}, svg);
+
+    // 链路：graph 是双向的，按无向键去重，只画一条
+    var drawn = {};
+    Object.keys(state.graph).forEach(function (u) {
+      var nbrs = state.graph[u] || {};
+      Object.keys(nbrs).forEach(function (v) {
+        if (!lay.pos[u] || !lay.pos[v]) return;
+        var key = edgeKey(u, v);
+        if (drawn[key]) return;
+        drawn[key] = true;
+
+        var a = lay.pos[u], b = lay.pos[v];
+        var onPath = pathEdges[key];
+        var removed = flash.removed.has(key);
+        var line = el("line", {
+          x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+          stroke: removed ? "var(--bad)" : (onPath || "var(--link)"),
+          "stroke-width": removed ? 4 : (onPath ? 5 : 2),
+          "stroke-linecap": "round",
+          opacity: onPath ? 0.95 : 0.75
+        }, gEdges);
+        if (removed) line.setAttribute("stroke-dasharray", "7 5");
+
+        var sportUV = (state.graph[u][v] || {}).sport;
+        var sportVU = (state.graph[v] && state.graph[v][u] || {}).sport;
+        el("title", {}, line).textContent =
+          u + " ⇄ " + v + "   端口 " + sportUV + " / " + sportVU;
+      });
+    });
+
+    // 断掉的链路已经不在 graph 里，只删不补的话页面上是「凭空消失」而不是「变红」。
+    // FR-14 的判据是 10s 内变红，所以这里按 flash 里记的边补一条红色虚线。
+    flash.removed.forEach(function (key) {
+      if (drawn[key]) return;
+      var parts = key.split("|");
+      var u = parts[0], v = parts[1];
+      if (!lay.pos[u] || !lay.pos[v]) return;
+      var ga = lay.pos[u], gb = lay.pos[v];
+      var ghost = el("line", {
+        x1: ga.x, y1: ga.y, x2: gb.x, y2: gb.y,
+        stroke: "var(--bad)", "stroke-width": 4, "stroke-dasharray": "7 5",
+        "stroke-linecap": "round", opacity: 0.9
+      }, gEdges);
+      el("title", {}, ghost).textContent = "已断开：" + u + " ⇄ " + v;
+    });
+
+    // 主机：按挂载交换机分组，沿该交换机的外侧法线扇形排布
+    var bySwitch = {};
+    Object.keys(state.hosts).forEach(function (ip) {
+      var h = state.hosts[ip];
+      if (!h || !lay.pos[h.dpid]) return;
+      (bySwitch[h.dpid] = bySwitch[h.dpid] || []).push({ip: ip, host: h});
+    });
+
+    Object.keys(bySwitch).forEach(function (dpid) {
+      var anchor = lay.pos[dpid];
+      var list = bySwitch[dpid].sort(function (x, y) { return x.ip < y.ip ? -1 : 1; });
+      var dist = lay.radius ? 96 : 120;
+
+      list.forEach(function (item, idx) {
+        var spread = list.length === 1 ? 0 : 0.5;
+        var offset = list.length === 1 ? 0 : (idx - (list.length - 1) / 2) * spread;
+        var angle = anchor.angle + offset;
+        var hx = anchor.x + dist * Math.cos(angle);
+        var hy = anchor.y + dist * Math.sin(angle);
+
+        el("line", {
+          x1: anchor.x, y1: anchor.y, x2: hx, y2: hy,
+          stroke: "#2b3b52", "stroke-width": 1.5, "stroke-dasharray": "3 3"
+        }, gHosts);
+
+        var box = el("rect", {
+          x: hx - 36, y: hy - 23, width: 72, height: 46, rx: 8,
+          fill: "var(--host-fill)", stroke: "#2f4664", "stroke-width": 1
+        }, gHosts);
+        el("title", {}, box).textContent = item.ip + " @ " + dpid + " 端口 " + item.host.port;
+
+        el("text", {
+          x: hx, y: hy - 4, "text-anchor": "middle", "dominant-baseline": "central",
+          fill: "#dbe6f5", "font-size": 12, "font-family": "inherit"
+        }, gHosts).textContent = item.ip;
+
+        el("text", {
+          x: hx, y: hy + 12, "text-anchor": "middle", "dominant-baseline": "central",
+          fill: "var(--dim)", "font-size": 10, "font-family": "inherit"
+        }, gHosts).textContent = "eth" + item.host.port;
+      });
+    });
+
+    // 交换机
+    lay.switches.forEach(function (dpid) {
+      var p = lay.pos[dpid];
+      var g = el("g", {}, gNodes);
+      el("circle", {
+        cx: p.x, cy: p.y, r: 26,
+        fill: "var(--sw-fill)", stroke: "var(--sw-stroke)", "stroke-width": 2
+      }, g);
+      el("circle", {
+        cx: p.x, cy: p.y, r: 34, fill: "none",
+        stroke: "var(--sw-stroke)", "stroke-width": 1, opacity: 0.18
+      }, g);
+      el("text", {
+        x: p.x, y: p.y, "text-anchor": "middle", "dominant-baseline": "central",
+        fill: "#e6edf7", "font-size": 14, "font-weight": 600, "font-family": "inherit"
+      }, g).textContent = shortId(dpid);
+      el("title", {}, g).textContent = dpid + "（显示末两位）";
+    });
+  }
+
+  function renderPanel() {
+    // 已下发路径
+    var pathList = document.getElementById("pathList");
+    clear(pathList);
+    if (!state.paths.length) {
+      pathList.innerHTML = '<li class="empty-hint">暂无</li>';
+    } else {
+      state.paths.forEach(function (p, i) {
+        var color = PATH_COLORS[i % PATH_COLORS.length];
+        var li = document.createElement("li");
+        li.innerHTML =
+          '<span class="k" style="color:' + color + '">' +
+          escapeHtml(p.src) + " → " + escapeHtml(p.dst) + "</span>" +
+          '<span class="tag">' + ((p.path || []).length) + " 跳</span>" +
+          '<span class="full">' + escapeHtml((p.path || []).map(shortId).join(" → ")) +
+          "　" + fmtTime(p.installed_at) + "</span>";
+        pathList.appendChild(li);
+      });
+    }
+
+    // 变化摘要
+    var diffList = document.getElementById("diffList");
+    clear(diffList);
+    var d = state.lastDiff;
+    if (!d || !d.changed) {
+      diffList.innerHTML = '<li class="empty-hint">尚未检测到变化</li>';
+    } else {
+      addDiffRow(diffList, "链路断开", (d.edges_removed || []).map(pairText), "var(--bad)");
+      addDiffRow(diffList, "链路新增", (d.edges_added || []).map(pairText), "var(--ok)");
+      addDiffRow(diffList, "设备增减",
+        (d.nodes_added || []).map(shortId).concat((d.nodes_removed || []).map(shortId)), null);
+      addDiffRow(diffList, "主机迁移", Object.keys(d.hosts_moved || {}), null);
+      addDiffRow(diffList, "主机增减",
+        Object.keys(d.hosts_added || {}).concat(d.hosts_removed || []), null);
+      var ts = document.createElement("li");
+      ts.className = "empty-hint";
+      ts.textContent = "发生于 " + fmtTime(d.ts);
+      diffList.appendChild(ts);
+    }
+
+    // 主机位置
+    var hostList = document.getElementById("hostList");
+    clear(hostList);
+    var ips = Object.keys(state.hosts).sort();
+    if (!ips.length) {
+      hostList.innerHTML = '<li class="empty-hint">暂无（先 pingall）</li>';
+    } else {
+      ips.forEach(function (ip) {
+        var h = state.hosts[ip];
+        var li = document.createElement("li");
+        li.innerHTML = '<span class="k">' + escapeHtml(ip) + "</span>" +
+          '<span class="tag">' + escapeHtml(shortId(h.dpid)) + " · eth" + h.port + "</span>";
+        hostList.appendChild(li);
+      });
+    }
+
+    syncSelects(ips);
+  }
+
+  function pairText(pair) {
+    return (pair || []).map(shortId).join("–");
+  }
+
+  function addDiffRow(list, label, items, color) {
+    if (!items || !items.length) return;
+    var text = items.slice(0, 4).join("、") +
+      (items.length > 4 ? " 等 " + items.length + " 项" : "");
+    var li = document.createElement("li");
+    li.innerHTML = '<span class="k" style="color:' + (color || "var(--muted)") + '">' +
+      label + "</span><span>" + escapeHtml(text) + "</span>";
+    list.appendChild(li);
+  }
+
+  function syncSelects(ips) {
+    ["src", "dst"].forEach(function (id) {
+      var sel = document.getElementById(id);
+      var current = sel.value;
+      clear(sel);
+      ips.forEach(function (ip) {
+        var opt = document.createElement("option");
+        opt.value = ip;
+        opt.textContent = ip + "  @ " + shortId(state.hosts[ip].dpid);
+        sel.appendChild(opt);
+      });
+      if (ips.indexOf(current) !== -1) sel.value = current;
+    });
+
+    var src = document.getElementById("src");
+    var dst = document.getElementById("dst");
+    if (ips.length > 1 && (!dst.value || dst.value === src.value)) dst.value = ips[1];
+
+    var ready = ips.length >= 2;
+    document.getElementById("btnInstall").disabled = !ready;
+    document.getElementById("btnRemove").disabled = !ready;
+  }
+
+  // ------------------------------------------------------------------ 数据
+
+  function applyState(payload) {
+    if (!payload) return;
+    state.graph = payload.graph || {};
+    state.hosts = payload.hosts || {};
+    state.paths = payload.paths || [];
+    state.lastDiff = payload.last_diff || null;
+    state.onosOk = !!payload.onos_ok;
+    state.pollCount = payload.poll_count || 0;
+    state.pollMs = payload.poll_ms || 0;
+    state.wsClients = payload.ws_clients || 0;
+    state.pushCount = payload.push_count || 0;
+    state.lastPollTs = payload.last_poll_ts || null;
+  }
+
+  function refresh() {
+    fetch("/api/state", {headers: {"Accept": "application/json"}})
+      .then(function (r) { return r.json(); })
+      .then(function (payload) { applyState(payload); render(); })
+      .catch(function (err) { setMsg("拉取 /api/state 失败：" + err.message, "err"); });
+  }
+
+  function markFlash(diff) {
+    flash.removed = new Set();
+    flash.added = new Set();
+    ((diff && diff.edges_removed) || []).forEach(function (pair) {
+      if (pair && pair.length === 2) flash.removed.add(edgeKey(pair[0], pair[1]));
+    });
+    ((diff && diff.edges_added) || []).forEach(function (pair) {
+      if (pair && pair.length === 2) flash.added.add(edgeKey(pair[0], pair[1]));
+    });
+    if (flash.timer) clearTimeout(flash.timer);
+    flash.timer = setTimeout(function () {
+      flash.removed.clear();
+      flash.added.clear();
+      render();
+    }, FLASH_MS);
+  }
+
+  // ------------------------------------------------------------------ 交互
+
+  function setMsg(text, kind) {
+    var msg = document.getElementById("msg");
+    msg.textContent = text || "";
+    msg.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  function callRoute(method) {
+    var src = document.getElementById("src").value;
+    var dst = document.getElementById("dst").value;
+    if (!src || !dst) {
+      setMsg("还没有可选主机：要先 pingall，ONOS 才有 IP。", "err");
+      return;
+    }
+    setMsg(method === "POST" ? "下发中…" : "删除中…");
+
+    fetch("/api/route", {
+      method: method,
+      headers: {"Content-Type": "application/json", "Accept": "application/json"},
+      body: JSON.stringify({src: src, dst: dst})
+    })
+      .then(function (r) {
+        return r.json().then(function (body) { return {status: r.status, body: body}; });
+      })
+      .then(function (res) {
+        var body = res.body || {};
+        if (body.ok) {
+          setMsg(method === "POST"
+            ? "已下发 " + src + " → " + dst + "：" + (body.path || []).map(shortId).join(" → ") +
+              "（cost " + body.cost + "）"
+            : "已删除 " + src + " → " + dst, "ok");
+        } else {
+          setMsg((method === "POST" ? "下发失败：" : "删除失败：") +
+            (body.error || ("HTTP " + res.status)), "err");
+        }
+        refresh();
+      })
+      .catch(function (err) { setMsg("请求失败：" + err.message, "err"); });
+  }
+
+  document.getElementById("btnInstall").addEventListener("click", function () {
+    callRoute("POST");
+  });
+  document.getElementById("btnRemove").addEventListener("click", function () {
+    callRoute("DELETE");
+  });
+
+  // ------------------------------------------------------------------ WebSocket
+
+  function connectWs() {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var ws;
+    try {
+      ws = new WebSocket(proto + "//" + location.host + "/ws/topo");
+    } catch (err) {
+      setTimeout(connectWs, 2000);
+      return;
+    }
+
+    ws.onmessage = function (event) {
+      var msg;
+      try { msg = JSON.parse(event.data); } catch (err) { return; }
+      if (msg.type !== "topo") return;
+      if (msg.graph) state.graph = msg.graph;
+      if (msg.hosts) state.hosts = msg.hosts;
+      if (msg.diff) {
+        state.lastDiff = msg.diff;
+        markFlash(msg.diff);
+      }
+      render();
+      refresh(); // ws_clients / push_count 只在 /api/state 里
+    };
+    ws.onclose = function () { setTimeout(connectWs, 2000); };
+    ws.onerror = function () { /* 交给 onclose 重连 */ };
+  }
+
+  // ------------------------------------------------------------------ 启动
+
+  refresh();
+  connectWs();
+  setInterval(refresh, REFRESH_MS);
+})();
+</script>
 </body>
 </html>

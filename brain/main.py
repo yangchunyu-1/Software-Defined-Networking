@@ -75,7 +75,7 @@ async def _maybe_await(value):
 
 @app.get("/")
 async def index(request):
-    # 前端可视化属后续迭代；当前 static/index.html 是占位自检页。
+    # static/index.html：拓扑视图（交换机/主机/已下发路径 + 断链高亮），零外网依赖。
     if STATIC_INDEX.exists():
         return await response.file(str(STATIC_INDEX))
     return response.text("sdn-brain is running. See /api/state")
