@@ -113,10 +113,21 @@ def _criteria_key(selector: Any) -> tuple:
 
 
 def _treatment_key(treatment: Any) -> tuple:
-    """只比 instructions：ONOS 会追加 deferred 等键，比较整个 treatment 会误判。"""
+    """只比 instructions：ONOS 会追加 deferred 等键，比较整个 treatment 会误判。
+
+    ⚠ 实测（2026-11-12，ONOS 2.7.0）：提交空 `instructions: []` 时，GET 回来是
+    `{"instructions":[{"type":"NOACTION"}],"deferred":[]}`。NOACTION 就是空指令的
+    规范化写法，必须过滤掉，否则 want=() 而 got 非空，自己刚下发的规则会被跳过
+    （19:36 第二轮 SMOKE 即因此 `flowId=None`）。
+    """
     if not isinstance(treatment, dict):
         return ()
-    items = [_canon(item) for item in (treatment.get("instructions") or [])]
+    items = []
+    for item in (treatment.get("instructions") or []):
+        if (isinstance(item, dict) and len(item) == 1
+                and str(item.get("type", "")).upper() == "NOACTION"):
+            continue
+        items.append(_canon(item))
     return tuple(sorted(items, key=repr))
 
 
@@ -272,8 +283,10 @@ async def set_port_state(device_id: str, port_id: str, enabled: bool) -> bool:
 
     按 docs/02 §2 端点表第 7 行。原先只有同步版 onos.py 有这个函数，
     单客户端方案下补进异步版，N7 不再依赖 requests。
-    ❓ 本函数仍未实测（2026-11-12 首轮写操作 SMOKE 只跑到 flow 部分）。
-    `post_flow` 已确认能下发（流表数 4→5）、`delete_flow` 待复跑，端口 down/up 留 N7 验证。
+    ✅ 2026-11-12 已实测：带 `--port-state` 的写操作 SMOKE 输出 `WRITES SMOKE OK`，
+    在起好 Mininet 拓扑（/links 4 条）后跑通端口 down/up，脚本 finally 强制恢复，
+    复跑后 /links 仍为 4 条。`post_flow`（201、空 body）与
+    `delete_flow`（204、立即生效）同样已实测。
     """
     path = f"/devices/{device_id}/portstate/{port_id}"
     await _request(
