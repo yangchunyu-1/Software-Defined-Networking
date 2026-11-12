@@ -244,3 +244,5 @@ Thumbs.db
 desktop.ini
 *.swp
 *~
+# Office 打开文档时的临时锁文件（labs/ 下的 docx 会生成）
+~$*

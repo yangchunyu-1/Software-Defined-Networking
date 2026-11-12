@@ -37,8 +37,9 @@
 
 | 项 | 状态 | 怎么确认 |
 |---|---|---|
-| `POST /flows/{id}` 的响应体里是否带 flowId | ✅ 不带（2026-11-12 实测：2xx、响应体无可用 JSON，流表数 `4 → 5`） | 已回写 `02` 第 2.4 节；`id` 走 GET 反查且须归一化后再匹配 |
-| `sanic 25.12.1` 的 `single_process` 参数是否仍可用 | ⚠ 版本已核对为 `25.12.1`；测试模式已冒烟（`sanic-testing` 即用该参数起服务，`test_api.py` 10/10 通过），常驻模式未起 | `python3 main.py` 起一次常驻服务 |
+| `POST /flows/{id}` 的响应体里是否带 flowId | ✅ 不带（2026-11-12 实测：**201、空 body**，流表数 `4 → 5`） | 已回写 `02` 第 2.4 节；`id` 走 GET 反查且须归一化后再匹配，第四轮 SMOKE 已验证通过 |
+| `DELETE /flows/{id}/{flowId}` 是否真能删掉 | ✅ **204、空 body**，8ms 内生效（2026-11-12 受控实验） | 已回写 `02` 第 2.5 节；读回若仍在就按同一 id 轮询，不批量删 |
+| `sanic 25.12.1` 的 `single_process` 参数是否仍可用 | ✅ 2026-11-12 实测：测试模式（`sanic-testing`，`test_api.py` 10/10）与常驻模式（`python3 main.py`）均可用 | 常驻模式起服务后 `GET /api/state` 返回 14 个字段、`graph` 节点数与交换机数一致、`poll_count` 持续增长且 `onos_errors=0` |
 | `ovs-ofctl` 下发 group 是否需要 sudo | ❓ 推测需要 | 组播阶段实测 |
 | Mininet 拓扑里交换机 dpid 与 ONOS `of:xxxx` 的对应关系 | ❓ 未实测 | 起拓扑后对一遍 |
 
