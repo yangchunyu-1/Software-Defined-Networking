@@ -272,9 +272,19 @@ async def post_flow(device_id: str, flow: dict) -> str | None:
 
 
 async def delete_flow(device_id: str, flow_id: str) -> bool:
-    """精确删一条，成功 200/204 返回 True。"""
+    """精确删一条，成功 200/204 返回 True。
+
+    404 视为「已经不存在」也返回 True：交换机重启、ONOS 重连或人工清流之后，
+    本地记录的 flowId 可能已经失效；把它当失败会让 deployed 永久卡在
+    cleanup_required（删不掉、也重新登记不了）。
+    """
     path = f"/flows/{device_id}/{flow_id}"
-    await _request("DELETE", path, expect_json=False)
+    try:
+        await _request("DELETE", path, expect_json=False)
+    except OnosError as exc:
+        if exc.status_code == 404:
+            return True
+        raise
     return True
 
 

@@ -291,6 +291,131 @@ def test_route_end_to_end_real_flow_logic(ctx, monkeypatch):
     assert fake.flows[S1] == [] and fake.flows[S3] == []
 
 
+def test_route_self_loop_rejected(ctx):
+    """src == dst 不是合法通信对，不能下发自环规则。"""
+    _, res = client.post(
+        "/api/route", json={"src": "10.0.0.1", "dst": "10.0.0.1"}
+    )
+    assert res.status == 400
+    assert res.json["error"] == "invalid_pair"
+    assert app.ctx.deployed == {}
+
+
+def test_route_both_installs_two_directions(ctx, monkeypatch):
+    monkeypatch.setattr(main_module.path, "dijkstra", lambda g, s, d: FAKE_RES)
+    monkeypatch.setattr(main_module.flow, "install_path", _fake_install)
+    _, res = client.post(
+        "/api/route",
+        json={"src": "10.0.0.1", "dst": "10.0.0.3", "both": True},
+    )
+    assert res.status == 200
+    body = res.json
+    assert body["ok"] is True
+    assert body["bidirectional"] is True
+    assert len(body["paths"]) == 2
+    assert {p["src"] for p in body["paths"]} == {"10.0.0.1", "10.0.0.3"}
+    assert all(p["reused"] is False for p in body["paths"])
+    assert set(app.ctx.deployed) == {
+        ("10.0.0.1", "10.0.0.3"),
+        ("10.0.0.3", "10.0.0.1"),
+    }
+
+
+def test_route_both_reuses_existing_direction(ctx, monkeypatch):
+    ctx.deployed = {("10.0.0.1", "10.0.0.3"): dict(FAKE_RECORD)}
+    monkeypatch.setattr(main_module.path, "dijkstra", lambda g, s, d: FAKE_RES)
+    monkeypatch.setattr(main_module.flow, "install_path", _fake_install)
+    _, res = client.post(
+        "/api/route",
+        json={"src": "10.0.0.1", "dst": "10.0.0.3", "both": True},
+    )
+    assert res.status == 200
+    flags = {p["dst"]: p["reused"] for p in res.json["paths"]}
+    assert flags == {"10.0.0.3": True, "10.0.0.1": False}
+    assert ("10.0.0.3", "10.0.0.1") in app.ctx.deployed
+
+
+def test_route_both_all_exist_conflict(ctx, monkeypatch):
+    ctx.deployed = {
+        ("10.0.0.1", "10.0.0.3"): dict(FAKE_RECORD),
+        ("10.0.0.3", "10.0.0.1"): dict(FAKE_RECORD),
+    }
+    monkeypatch.setattr(main_module.path, "dijkstra", lambda g, s, d: FAKE_RES)
+    _, res = client.post(
+        "/api/route",
+        json={"src": "10.0.0.1", "dst": "10.0.0.3", "both": True},
+    )
+    assert res.status == 409
+    assert res.json["error"] == "already_exists"
+
+
+def test_route_both_rolls_back_first_when_second_fails(ctx, monkeypatch):
+    """双向下发第二个方向失败时，第一个方向必须撤回，不能留半通状态。"""
+    calls = []
+
+    def _install(key, res, graph, sh, dh, deployed, onos, priority):
+        if key == ("10.0.0.3", "10.0.0.1"):
+            return {"ok": False, "error": "post_result_unknown", "flow_ids": []}
+        deployed[key] = dict(FAKE_RECORD)
+        return {"ok": True, "error": None, "flow_ids": FAKE_RECORD["flow_ids"]}
+
+    def _uninstall(key, deployed, onos):
+        calls.append(key)
+        deployed.pop(key, None)
+        return {"ok": True, "error": None, "remaining": []}
+
+    monkeypatch.setattr(main_module.path, "dijkstra", lambda g, s, d: FAKE_RES)
+    monkeypatch.setattr(main_module.flow, "install_path", _install)
+    monkeypatch.setattr(main_module.flow, "uninstall", _uninstall)
+
+    _, res = client.post(
+        "/api/route",
+        json={"src": "10.0.0.1", "dst": "10.0.0.3", "both": True},
+    )
+    assert res.status == 502
+    assert res.json["error"] == "post_result_unknown"
+    assert calls == [("10.0.0.1", "10.0.0.3")]
+    assert app.ctx.deployed == {}
+
+
+def test_delete_route_both(ctx, monkeypatch):
+    ctx.deployed = {
+        ("10.0.0.1", "10.0.0.3"): dict(FAKE_RECORD),
+        ("10.0.0.3", "10.0.0.1"): dict(FAKE_RECORD),
+    }
+    monkeypatch.setattr(main_module.flow, "uninstall", _fake_uninstall)
+    _, res = client.request(
+        "/api/route",
+        http_method="DELETE",
+        json={"src": "10.0.0.1", "dst": "10.0.0.3", "both": True},
+    )
+    assert res.status == 200
+    assert len(res.json["removed"]) == 2
+    assert app.ctx.deployed == {}
+
+
+def test_delete_route_both_missing_side_is_ok(ctx, monkeypatch):
+    ctx.deployed = {("10.0.0.1", "10.0.0.3"): dict(FAKE_RECORD)}
+    monkeypatch.setattr(main_module.flow, "uninstall", _fake_uninstall)
+    _, res = client.request(
+        "/api/route",
+        http_method="DELETE",
+        json={"src": "10.0.0.1", "dst": "10.0.0.3", "both": True},
+    )
+    assert res.status == 200
+    assert res.json["removed"] == [{"src": "10.0.0.1", "dst": "10.0.0.3"}]
+
+
+def test_delete_route_both_not_found(ctx):
+    _, res = client.request(
+        "/api/route",
+        http_method="DELETE",
+        json={"src": "10.0.0.1", "dst": "10.0.0.3", "both": True},
+    )
+    assert res.status == 404
+    assert res.json["error"] == "not_found"
+
+
 def test_multicast_not_implemented_in_phase1(ctx):
     _, res = client.post(
         "/api/multicast", json={"src": "10.0.0.1", "dsts": ["10.0.0.3"], "group_id": 1}
