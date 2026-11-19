@@ -240,9 +240,3 @@ cd ~/brain && ./run.sh demo          # 起假 ONOS + 大脑，跑完整自检，
 
 大脑说 **HTTP/JSON**（北向），ONOS 说 **OpenFlow 1.3**（南向）。大脑不直接跟交换机打交道——
 这正是控制平面与数据平面分离、北向接口可编程的实证。
-
----
-
-## 协作者打卡
-
-- Aletheia06：Hello this is Aletheia06
