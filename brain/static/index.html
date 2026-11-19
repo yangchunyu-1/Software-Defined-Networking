@@ -533,7 +533,9 @@
     fetch("/api/route", {
       method: method,
       headers: {"Content-Type": "application/json", "Accept": "application/json"},
-      body: JSON.stringify({src: src, dst: dst})
+      // both:true 是必须的：同子网 ping 的回程是独立方向。只下发单向时
+      // 去程通、回程丢，A2 就是 100% loss（2026-11-19 真实拓扑实测）。
+      body: JSON.stringify({src: src, dst: dst, both: true})
     })
       .then(function (r) {
         return r.json().then(function (body) { return {status: r.status, body: body}; });
@@ -542,9 +544,9 @@
         var body = res.body || {};
         if (body.ok) {
           setMsg(method === "POST"
-            ? "已下发 " + src + " → " + dst + "：" + (body.path || []).map(shortId).join(" → ") +
-              "（cost " + body.cost + "）"
-            : "已删除 " + src + " → " + dst, "ok");
+            ? "已下发 " + src + " ↔ " + dst + "（双向）：" +
+              (body.path || []).map(shortId).join(" → ") + "（cost " + body.cost + "）"
+            : "已删除 " + src + " ↔ " + dst + "（双向）", "ok");
         } else {
           setMsg((method === "POST" ? "下发失败：" : "删除失败：") +
             (body.error || ("HTTP " + res.status)), "err");

@@ -6,14 +6,17 @@
 这种命令有两个毛病：① 每个人写法不一样，结果没法互相比对；② 失败时只看到一行
 grep 结果，不知道是哪一步断的。所以把判据固化成一个脚本，README 里只留一条命令。
 
+**只对真实环境取值**：脚本连的是正在运行的 brain + 真实 ONOS + Mininet 拓扑。
+它不注入任何数据、不替代任何依赖，所以拿到的绿可以直接贴进 docs/06。
+
 默认只读（不往网络里下发任何规则），加了 `--route` 才会真的走一遍
-POST /api/route → 查表 → DELETE。加 `--mock` 才会做断链与 WS 推送的检查。
+POST /api/route → 查 deployed → DELETE。断链场景要动交换机端口，
+不放在这里自动做（见 README「验断链」一节的手工命令）。
 
 跑法
 ----
     python3 tools/smoke.py                                  # 只读自检
-    python3 tools/smoke.py --route 10.0.0.1 10.0.0.3         # 含下发/删除闭环
-    python3 tools/smoke.py --mock --route 10.0.0.1 10.0.0.3  # mock ONOS 全流程
+    python3 tools/smoke.py --route 10.0.0.1 10.0.0.3         # 含下发/撤销闭环
 
 退出码：0 没有 FAIL（SKIP 不影响退出码）；1 有 FAIL；2 加了 --strict 且有 SKIP。
 """
@@ -132,7 +135,7 @@ def check_basics(base: str, rep: Report, args) -> dict | None:
     if not state.get("onos_ok"):
         rep.fail(
             "onos_ok",
-            f"False，last_error={str(state.get('last_error'))[:120]}（先看 curl 8181/onos/v1/devices）",
+            f"False，last_error={str(state.get('last_error'))[:120]}（先看 ./run.sh check）",
         )
     else:
         rep.ok("onos_ok", "True")
@@ -162,21 +165,33 @@ def check_basics(base: str, rep: Report, args) -> dict | None:
     return state
 
 
-def check_route(base: str, rep: Report, src: str, dst: str, mock_base: str | None) -> None:
-    total_before = flows_total(mock_base) if mock_base else None
-
-    status, body = http("POST", f"{base}/api/route", {"src": src, "dst": dst}, timeout=15)
+def check_route(base: str, rep: Report, src: str, dst: str) -> None:
+    # 必须带 both:true：同子网 ping 的回程是独立方向，只下发单向时 A2 一定 100% loss
+    # （2026-11-19 真实拓扑实测）。这里按「演示该怎么调」来验，不按「最省事的调法」验。
+    status, body = http(
+        "POST", f"{base}/api/route", {"src": src, "dst": dst, "both": True}, timeout=20
+    )
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        rep.fail(f"POST 下发 {src}->{dst}", f"HTTP {status}，非 JSON：{body[:120]}")
+        rep.fail(f"POST 下发 {src}<->{dst}", f"HTTP {status}，非 JSON：{body[:120]}")
         return
     if status == 200 and payload.get("ok"):
         path = payload.get("path") or []
-        rep.ok(f"POST 下发 {src}->{dst}", f"path={path} cost={payload.get('cost')}")
+        rep.ok(
+            f"POST 下发 {src}<->{dst}",
+            f"path={path} cost={payload.get('cost')} "
+            f"{'双向' if payload.get('bidirectional') else '仅单向'}",
+        )
     else:
-        rep.fail(f"POST 下发 {src}->{dst}", f"HTTP {status}：{body[:160]}")
+        rep.fail(f"POST 下发 {src}<->{dst}", f"HTTP {status}：{body[:160]}")
         return
+
+    pairs = {(p.get("src"), p.get("dst")) for p in payload.get("paths") or []}
+    if (src, dst) in pairs and (dst, src) in pairs:
+        rep.ok("回程规则也下了", "两个方向都在 paths 里（否则 ping 只去不回）")
+    else:
+        rep.fail("回程规则也下了", f"paths 只有 {sorted(pairs)}，缺一个方向")
 
     state, err = get_state(base)
     if state is None:
@@ -188,132 +203,69 @@ def check_route(base: str, rep: Report, src: str, dst: str, mock_base: str | Non
     else:
         rep.fail("deployed 有记录", f"paths 里找不到 {src}->{dst}")
 
-    if mock_base:
-        n = flows_total(mock_base)
-        if n and n >= len(payload.get("path") or []):
-            rep.ok("流表已落到设备", f"设备上共 {n} 条规则（路径 {len(payload['path'])} 跳）")
-        else:
-            rep.fail("流表已落到设备", f"设备上 {n} 条规则，应有 >= 路径跳数")
-
-    status, body = http("DELETE", f"{base}/api/route", {"src": src, "dst": dst}, timeout=15)
+    status, body = http(
+        "DELETE", f"{base}/api/route", {"src": src, "dst": dst, "both": True}, timeout=20
+    )
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        rep.fail(f"DELETE 撤销 {src}->{dst}", f"HTTP {status}，非 JSON：{body[:120]}")
+        rep.fail(f"DELETE 撤销 {src}<->{dst}", f"HTTP {status}，非 JSON：{body[:120]}")
         return
     if status == 200 and payload.get("ok"):
-        rep.ok(f"DELETE 撤销 {src}->{dst}", "ok")
+        rep.ok(f"DELETE 撤销 {src}<->{dst}", "ok")
     else:
-        rep.fail(f"DELETE 撤销 {src}->{dst}", f"HTTP {status}：{body[:160]}")
+        rep.fail(f"DELETE 撤销 {src}<->{dst}", f"HTTP {status}：{body[:160]}")
 
     state, _ = get_state(base)
-    still = [p for p in (state or {}).get("paths") or [] if (p.get("src"), p.get("dst")) == (src, dst)]
-    if still:
-        rep.fail("撤销后 deployed 已清", "记录还在，说明 uninstall 没删干净")
+    left = [
+        (p.get("src"), p.get("dst"))
+        for p in (state or {}).get("paths") or []
+        if {p.get("src"), p.get("dst")} == {src, dst}
+    ]
+    if left:
+        rep.fail("撤销后 deployed 已清", f"还剩 {left}，说明 uninstall 没删干净")
     else:
-        rep.ok("撤销后 deployed 已清", "paths 里已无该对")
-
-    if mock_base:
-        n = flows_total(mock_base)
-        if n == 0:
-            rep.ok("撤销后流表已清", "设备上 0 条规则（精确删除，没留残规则）")
-        else:
-            rep.fail("撤销后流表已清", f"设备上还剩 {n} 条规则，会越积越多")
-        if total_before is not None and total_before == 0:
-            rep.ok("起始状态干净", "下发前设备上没有本项目规则")
+        rep.ok("撤销后 deployed 已清", "两个方向都从 paths 里消失")
 
 
-def flows_total(mock_base: str) -> int:
-    status, body = http("GET", f"{mock_base}/_mock/state")
-    if status != 200:
-        return -1
-    try:
-        return sum(json.loads(body).get("flows", {}).values())
-    except (json.JSONDecodeError, AttributeError):
-        return -1
+def check_ws(base: str, rep: Report) -> None:
+    """只验握手：证明 /ws/topo 路由在、页面连得上。
 
-
-def check_ws_and_break(base: str, rep: Report, mock_base: str, pair: tuple[str, str]) -> None:
-    """连 /ws/topo → 断一条链路 → 期望收到 edges_removed；恢复 → edges_added。
-
-    这是 FR-14「断链 10s 内变红」的服务端一半；能不能真变红还得开浏览器看。
+    「断链 10s 内变红」要动真实交换机端口，不适合塞进只读自检——
+    README「验断链」一节给了手工命令，判定看浏览器。
     """
     try:
         from websockets.sync.client import connect as ws_connect
     except Exception as exc:  # 没装 websockets 不算失败
-        rep.skip("WS 断链推送", f"未安装 websockets（{exc}），跳过")
+        rep.skip("WS 握手", f"未安装 websockets（{exc}），跳过")
         return
 
-    uri = base.replace("http://", "ws://").rstrip("/") + "/ws/topo"
-    # websockets>=14 的 connect() 是上下文管理器（直接 .recv 会告警），老版本没有 proxy 参数。
+    uri = base.replace("http://", "ws://").replace("https://", "wss://").rstrip("/") + "/ws/topo"
     try:
-        cm = ws_connect(uri, proxy=None, open_timeout=5)
-    except TypeError:
-        cm = ws_connect(uri, open_timeout=5)
+        try:
+            cm = ws_connect(uri, proxy=None, open_timeout=5)
+        except TypeError:  # websockets<14 没有 proxy 参数
+            cm = ws_connect(uri, open_timeout=5)
+        with cm as _conn:
+            rep.ok("WS 握手", uri)
     except Exception as exc:
         rep.fail("WS 握手", f"{type(exc).__name__}: {exc}")
-        return
-
-    a, b = pair
-    try:
-        with cm as conn:
-            rep.ok("WS 握手", uri)
-            status, body = http("POST", f"{mock_base}/_mock/link", {"a": a, "b": b, "up": False})
-            if status != 200:
-                rep.fail("mock 断链", f"HTTP {status}: {body[:120]}")
-                return
-            t0 = time.time()
-            try:
-                msg = json.loads(conn.recv(timeout=15))
-            except Exception as exc:
-                rep.fail("断链推送", f"15s 内没收到推送：{type(exc).__name__}: {exc}")
-                return
-            removed = (msg.get("diff") or {}).get("edges_removed") or []
-            cost = time.time() - t0
-            if removed:
-                rep.ok("断链推送", f"{cost:.1f}s 收到 edges_removed={removed}")
-            else:
-                rep.fail("断链推送", f"收到了推送但 edges_removed 为空：{json.dumps(msg)[:140]}")
-
-            state, _ = get_state(base)
-            seen = (state or {}).get("last_diff") or {}
-            if seen.get("edges_removed"):
-                rep.ok("/api/diff 同步", f"edges_removed={seen['edges_removed']}")
-            else:
-                rep.fail("/api/diff 同步", "last_diff 里没有断链记录")
-
-            http("POST", f"{mock_base}/_mock/link", {"a": a, "b": b, "up": True})
-            try:
-                msg = json.loads(conn.recv(timeout=15))
-                added = (msg.get("diff") or {}).get("edges_added") or []
-                (rep.ok if added else rep.fail)("恢复推送", f"edges_added={added}")
-            except Exception as exc:
-                rep.fail("恢复推送", f"没收链路恢复的推送：{type(exc).__name__}: {exc}")
-    except Exception as exc:
-        rep.fail("WS 会话", f"{type(exc).__name__}: {exc}")
-    finally:
-        # 无论上面哪一步失败，链路都要恢复，否则后面的人看到的是断网环境。
-        http("POST", f"{mock_base}/_mock/link", {"a": a, "b": b, "up": True})
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="大脑端到端自检（docs/03 N4）")
+    parser = argparse.ArgumentParser(description="大脑端到端自检（docs/03 N4，只对真实环境取值）")
     parser.add_argument("--base", default="http://127.0.0.1:8000", help="大脑地址")
-    parser.add_argument("--mock", default=None, help="mock ONOS 地址，例如 http://127.0.0.1:8181")
-    parser.add_argument("--route", nargs=2, metavar=("SRC", "DST"), help="额外做一次下发/删除闭环")
+    parser.add_argument("--route", nargs=2, metavar=("SRC", "DST"), help="额外做一次下发/撤销闭环")
     parser.add_argument("--expect-devices", type=int, default=None)
     parser.add_argument("--expect-hosts", type=int, default=None)
-    parser.add_argument("--break-pair", nargs=2, metavar=("DPID_A", "DPID_B"), default=None,
-                        help="mock 模式下要断开的链路，默认 of:...2 与 of:...3")
     parser.add_argument("--wait", type=float, default=20.0, help="等 onos_ok 的最长秒数")
     parser.add_argument("--strict", action="store_true", help="把 SKIP 也当成不完整（退出码 2）")
     args = parser.parse_args()
 
     base = args.base.rstrip("/")
-    mock_base = args.mock.rstrip("/") if args.mock else None
     rep = Report()
 
-    print(f"自检目标: {base}" + (f"  (mock ONOS: {mock_base})" if mock_base else ""))
+    print(f"自检目标: {base}（真实 ONOS + Mininet）")
     print()
 
     state, waited = wait_onos_ok(base, args.wait)
@@ -325,15 +277,11 @@ def main() -> int:
     check_basics(base, rep, args)
 
     if args.route:
-        check_route(base, rep, args.route[0], args.route[1], mock_base)
+        check_route(base, rep, args.route[0], args.route[1])
     else:
-        rep.skip("下发/删除闭环", "未加 --route SRC DST")
+        rep.skip("下发/撤销闭环", "未加 --route SRC DST")
 
-    if mock_base:
-        pair = tuple(args.break_pair) if args.break_pair else ("of:0000000000000002", "of:0000000000000003")
-        check_ws_and_break(base, rep, mock_base, pair)  # type: ignore[arg-type]
-    else:
-        rep.skip("WS 断链推送", "未加 --mock（真网络断链请按 README 手动做）")
+    check_ws(base, rep)
 
     print()
     n_pass, n_fail, n_skip = rep.dump()
