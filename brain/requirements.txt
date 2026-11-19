@@ -1,0 +1,18 @@
+# 丙-6：依赖固定版本。N4 的判据是「三个人跑出同样的结果」，版本漂一点就会互相怀疑代码。
+# 装法（WSL 里按 README 用 --user）：
+#     pip install --user -r brain/requirements.txt
+#
+# 2026-11-19 实测通过的组合：Python 3.13.14 / sanic 25.12.1 / aiohttp 3.14.5
+# 最低 Python 3.10（README 环境前提），aiohttp 3.13 起不再支持 3.9。
+
+sanic==25.12.1
+aiohttp==3.14.5
+
+# 测试依赖。sanic-testing 必须与 sanic 配套：
+# 2026-11-12 踩过「app.test_client 每次请求起 worker 且不回收，同进程 12 条后整进程卡死」，
+# 契约测试已改用 app.asgi_client 绕开，但版本照样钉住，避免换版本又复发。
+pytest==9.2.0
+sanic-testing==24.6.0
+
+# tools/smoke.py 的 WebSocket 检查用；不装时那一项会 SKIP，不影响其他判据。
+websockets==17.4
