@@ -18,6 +18,7 @@ import asyncio
 import inspect
 import logging
 import time
+import weakref
 from pathlib import Path
 
 from sanic import Sanic, response
@@ -56,6 +57,19 @@ def init_ctx(app: Sanic) -> None:
 
 
 init_ctx(app)
+
+# 每个事件循环一把锁：生产环境单进程单循环，等价于全局锁；契约测试用 asyncio.run
+# 为每个请求新建循环，按循环分锁可以避免 Lock 跨循环绑定报错。
+_DEPLOY_LOCKS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _deploy_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _DEPLOY_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _DEPLOY_LOCKS[loop] = lock
+    return lock
 
 
 async def _maybe_await(value):
@@ -113,37 +127,26 @@ async def get_state(request):
     )
 
 
-@app.post("/api/route")
-async def post_route(request):
-    """下发一对主机的路径：查主机位置 -> dijkstra -> install_path。
+async def _install_one(src: str, dst: str, work: dict) -> tuple[int, dict, dict | None]:
+    """单向下发，record 写进调用方给的 work 副本。
 
-    出参（docs/02 §6）：成功 {"ok":true,"path":[...],"cost":N}；
-    不可达 {"ok":false,"error":"unreachable"}（HTTP 200，不抛异常，见 §7）。
+    出参 (HTTP 状态, 响应体, dijkstra 结果)。调用方负责把 work 整体替换回 app.ctx。
     """
-    body = request.json or {}
-    src, dst = body.get("src"), body.get("dst")
-    if not src or not dst:
-        return response.json({"ok": False, "error": "missing src/dst"}, status=400)
-
     src_host = app.ctx.host_table.get(src)
     dst_host = app.ctx.host_table.get(dst)
     if src_host is None or dst_host is None:
         # 主机没 pingall 过就没有 IP，返回 404 让调用方知道先去 pingall。
-        return response.json({"ok": False, "error": "unknown_host"}, status=404)
+        return 404, {"ok": False, "error": "unknown_host"}, None
 
     key = (src, dst)
-    if key in app.ctx.deployed:
+    if key in work:
         # 02 §3.6：已存在的 key 禁止静默覆盖，替换只能走 recompute。
-        return response.json({"ok": False, "error": "already_exists"}, status=409)
+        return 409, {"ok": False, "error": "already_exists"}, None
 
     res = path.dijkstra(app.ctx.graph, src_host["dpid"], dst_host["dpid"])
     if res is None:
-        return response.json({"ok": False, "error": "unreachable"})
+        return 200, {"ok": False, "error": "unreachable"}, None
 
-    # 02 §3.6 / §6.2：install_path 自己把 record 写进传入的 deployed（乙侧写入，
-    # 丙侧不再写第二遍）。这里传工作副本，成功后整体替换引用（口径 8）；
-    # 失败时副本里可能留有 cleanup_required 记录——必须写回，否则那些规则永远删不掉。
-    work = dict(app.ctx.deployed)
     try:
         result = await _maybe_await(
             flow.install_path(
@@ -158,55 +161,153 @@ async def post_route(request):
             )
         )
     except OnosError as exc:
-        # install_path 内部已按 §7 回滚，这里只上报错误原文。
         log.error("install_path failed for %s->%s: %s", src, dst, exc)
-        return response.json({"ok": False, "error": str(exc)[:200]}, status=502)
+        return 502, {"ok": False, "error": str(exc)[:200]}, None
 
-    app.ctx.deployed = work
     if not result.get("ok"):
         log.error("install_path refused %s->%s: %s", src, dst, result.get("error"))
-        return response.json(
-            {"ok": False, "error": result.get("error") or "install_failed"}, status=502
-        )
-
-    log.info("route installed %s->%s path=%s", src, dst, res["path"])
-    return response.json({"ok": True, "path": res["path"], "cost": res["cost"]})
+        return 502, {"ok": False, "error": result.get("error") or "install_failed"}, None
+    return 200, {"ok": True, "path": res["path"], "cost": res["cost"]}, res
 
 
-@app.delete("/api/route")
-async def delete_route(request):
+@app.post("/api/route")
+async def post_route(request):
+    """下发一对（或双向）主机的路径：查主机位置 -> dijkstra -> install_path。
+
+    `both:true` 时按 src->dst、dst->src 各下发一次（FR-17/同子网 ping 需要回程）。
+    出参（docs/02 §6.2）：成功 {"ok":true,"path":[...],"cost":N}；
+    双向成功额外带 "bidirectional":true 与 "paths":[{src,dst,path,cost,reused}]；
+    不可达 {"ok":false,"error":"unreachable"}（HTTP 200，不抛异常）。
+    """
     body = request.json or {}
     src, dst = body.get("src"), body.get("dst")
     if not src or not dst:
         return response.json({"ok": False, "error": "missing src/dst"}, status=400)
-    key = (src, dst)
-    if key not in app.ctx.deployed:
-        return response.json({"ok": False, "error": "not_found"}, status=404)
+    if src == dst:
+        return response.json({"ok": False, "error": "invalid_pair"}, status=400)
 
-    # uninstall 返回 {"ok","error","remaining"}，不是 bool；且它会原地改 record、
-    # 全部删净时 del deployed[key]。传副本以保持「只整体替换引用」（口径 8）。
-    work = dict(app.ctx.deployed)
-    work[key] = dict(work[key])
-    try:
-        result = await _maybe_await(flow.uninstall(key, work, onos_async))
-    except OnosError as exc:
-        log.error("uninstall failed for %s->%s: %s", src, dst, exc)
-        return response.json({"ok": False, "error": str(exc)[:200]}, status=502)
+    both = body.get("both") is True
+    keys = [(src, dst)] + ([(dst, src)] if both else [])
 
-    app.ctx.deployed = work
-    if not result.get("ok"):
-        log.error("uninstall incomplete %s->%s: %s", src, dst, result.get("error"))
+    async with _deploy_lock():
+        work = dict(app.ctx.deployed)
+        installed: list[tuple[str, str]] = []
+        paths: list[dict] = []
+
+        for a, b in keys:
+            status, payload, _ = await _install_one(a, b, work)
+
+            if status == 409 and both:
+                # 双向模式下已存在的一侧直接复用，只补缺的那一侧（可修复半装状态）
+                record = work[(a, b)]
+                paths.append(
+                    {
+                        "src": a,
+                        "dst": b,
+                        "path": record["path"],
+                        "cost": record.get("cost", len(record["path"]) - 1),
+                        "reused": True,
+                    }
+                )
+                continue
+
+            if not payload.get("ok"):
+                # 任一方向失败：把本次已装的方向回滚，不把网络留在半通状态
+                for key in reversed(installed):
+                    try:
+                        await _maybe_await(flow.uninstall(key, work, onos_async))
+                    except OnosError as exc:
+                        log.error("rollback %s failed: %s", key, exc)
+                # 失败方向可能留下 cleanup_required 记录，必须写回
+                app.ctx.deployed = work
+                return response.json(payload, status=status)
+
+            installed.append((a, b))
+            paths.append(
+                {
+                    "src": a,
+                    "dst": b,
+                    "path": payload["path"],
+                    "cost": payload["cost"],
+                    "reused": False,
+                }
+            )
+
+        app.ctx.deployed = work
+
+    if not both:
+        return response.json({"ok": True, "path": paths[0]["path"], "cost": paths[0]["cost"]})
+
+    if all(p["reused"] for p in paths):
+        return response.json({"ok": False, "error": "already_exists"}, status=409)
+
+    log.info("route installed both %s<->%s", src, dst)
+    return response.json(
+        {
+            "ok": True,
+            "bidirectional": True,
+            "path": paths[0]["path"],
+            "cost": paths[0]["cost"],
+            "paths": paths,
+        }
+    )
+
+
+@app.delete("/api/route")
+async def delete_route(request):
+    """撤销一对（或双向）通信。`both:true` 时两个方向都删，缺一侧不算错。"""
+    body = request.json or {}
+    src, dst = body.get("src"), body.get("dst")
+    if not src or not dst:
+        return response.json({"ok": False, "error": "missing src/dst"}, status=400)
+
+    both = body.get("both") is True
+    keys = [(src, dst)] + ([(dst, src)] if both else [])
+
+    async with _deploy_lock():
+        work = dict(app.ctx.deployed)
+        removed: list[dict] = []
+        failed: list[dict] = []
+
+        for key in keys:
+            if key not in work:
+                continue
+            # uninstall 会原地改 record，传副本以保持「只整体替换引用」（口径 8）
+            work[key] = dict(work[key])
+            try:
+                result = await _maybe_await(flow.uninstall(key, work, onos_async))
+            except OnosError as exc:
+                log.error("uninstall failed for %s->%s: %s", key[0], key[1], exc)
+                failed.append({"src": key[0], "dst": key[1], "error": str(exc)[:200]})
+                continue
+            if result.get("ok"):
+                removed.append({"src": key[0], "dst": key[1]})
+            else:
+                log.error("uninstall incomplete %s->%s: %s", key[0], key[1], result.get("error"))
+                failed.append(
+                    {
+                        "src": key[0],
+                        "dst": key[1],
+                        "error": result.get("error") or "uninstall_failed",
+                        "remaining": result.get("remaining", []),
+                    }
+                )
+
+        app.ctx.deployed = work
+
+    if failed:
         return response.json(
-            {
-                "ok": False,
-                "error": result.get("error") or "uninstall_failed",
-                "remaining": result.get("remaining", []),
-            },
+            {"ok": False, "error": "cleanup_required", "removed": removed, "failed": failed},
             status=502,
         )
+    if not removed:
+        return response.json({"ok": False, "error": "not_found"}, status=404)
 
-    log.info("route removed %s->%s", src, dst)
-    return response.json({"ok": True})
+    if not both:
+        return response.json({"ok": True})
+
+    log.info("route removed both %s<->%s", src, dst)
+    return response.json({"ok": True, "removed": removed})
 
 
 @app.get("/api/diff")
@@ -289,22 +390,24 @@ async def poll_loop(app: Sanic) -> None:
                 await push_ws(
                     app, {"type": "topo", "diff": d, "graph": graph, "hosts": host_table}
                 )
-                keys = await _maybe_await(flow.affected(d, app.ctx.deployed))
-                if keys:
-                    # recompute 会替换 / 标记 record，同样走副本 + 整体替换引用。
-                    work = {k: dict(v) for k, v in app.ctx.deployed.items()}
-                    records = await _maybe_await(
-                        flow.recompute(
-                            keys,
-                            graph,
-                            host_table,
-                            work,
-                            onos_async,
-                            config.FLOW_PRIORITY,
+                # 重算与 HTTP 下发都会读改写 deployed，必须串行（否则并发丢更新）
+                async with _deploy_lock():
+                    keys = await _maybe_await(flow.affected(d, app.ctx.deployed))
+                    if keys:
+                        # recompute 会替换 / 标记 record，同样走副本 + 整体替换引用。
+                        work = {k: dict(v) for k, v in app.ctx.deployed.items()}
+                        records = await _maybe_await(
+                            flow.recompute(
+                                keys,
+                                graph,
+                                host_table,
+                                work,
+                                onos_async,
+                                config.FLOW_PRIORITY,
+                            )
                         )
-                    )
-                    app.ctx.deployed = work
-                    log.info("recompute: %s", records)
+                        app.ctx.deployed = work
+                        log.info("recompute: %s", records)
         except OnosError as exc:
             app.ctx.onos_ok = False
             app.ctx.onos_errors += 1
